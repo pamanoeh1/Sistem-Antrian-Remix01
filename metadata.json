@@ -1,0 +1,8 @@
+{
+  "name": "Remix01 Sistem Antrean Cerdas Multi-Layar",
+  "description": "Aplikasi nomor antrean lengkap dengan Layar Display TV, Kios Pengambilan Tiket Cetak Thermal, dan Panel Petugas Admin Loket dengan notifikasi suara panggilan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
