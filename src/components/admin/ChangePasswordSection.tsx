@@ -8,6 +8,7 @@ import {
   setStoredAdminCredentials,
   resetAdminCredentialsToDefault,
 } from '../../utils/authStore';
+import { broadcastSyncEvent } from '../../utils/queueStore';
 import {
   KeyRound,
   Lock,
@@ -19,6 +20,9 @@ import {
   RotateCcw,
   ShieldCheck,
   ShieldAlert,
+  Phone,
+  Mail,
+  Save,
 } from 'lucide-react';
 
 export const ChangePasswordSection: React.FC = () => {
@@ -27,6 +31,8 @@ export const ChangePasswordSection: React.FC = () => {
   );
 
   const [currentUsername, setCurrentUsername] = useState(credentials.username);
+  const [recoveryPhone, setRecoveryPhone] = useState(credentials.recoveryPhone || '');
+  const [recoveryEmail, setRecoveryEmail] = useState(credentials.recoveryEmail || '');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -57,6 +63,28 @@ export const ChangePasswordSection: React.FC = () => {
 
   const strength = calculatePasswordStrength(newPassword);
 
+  const handleSaveRecoveryContacts = () => {
+    setSuccessMessage(null);
+    setErrorMessage(null);
+
+    const updated: AdminCredentials = {
+      ...credentials,
+      recoveryPhone: recoveryPhone.trim(),
+      recoveryEmail: recoveryEmail.trim(),
+      lastUpdated: new Date().toISOString(),
+    };
+    setStoredAdminCredentials(updated);
+    setCredentials(updated);
+    broadcastSyncEvent({
+      type: 'ADMIN_CREDENTIALS_UPDATED',
+      adminCredentials: updated,
+      timestamp: Date.now(),
+    });
+    setSuccessMessage(
+      'No. HP dan Email pemulihan untuk Reset Kata Sandi berhasil disimpan dan disinkronkan.'
+    );
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setSuccessMessage(null);
@@ -67,16 +95,21 @@ export const ChangePasswordSection: React.FC = () => {
       newPassword,
       confirmPassword,
       credentials,
-      currentUsername
+      currentUsername,
+      { recoveryPhone, recoveryEmail }
     );
 
     if (result.success && result.updatedCredentials) {
       setStoredAdminCredentials(result.updatedCredentials);
       setCredentials(result.updatedCredentials);
+      broadcastSyncEvent({
+        type: 'ADMIN_CREDENTIALS_UPDATED',
+        adminCredentials: result.updatedCredentials,
+        timestamp: Date.now(),
+      });
       setSuccessMessage(
-        `Password dan akun admin berhasil diperbarui! Gunakan password baru ini untuk login berikutnya.`
+        'Password dan kontak pemulihan admin berhasil diperbarui dan disinkronkan ke seluruh perangkat!'
       );
-      // Clear sensitive inputs
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
@@ -89,11 +122,20 @@ export const ChangePasswordSection: React.FC = () => {
     const defaultCreds = resetAdminCredentialsToDefault();
     setCredentials(defaultCreds);
     setCurrentUsername(defaultCreds.username);
+    setRecoveryPhone(defaultCreds.recoveryPhone || '');
+    setRecoveryEmail(defaultCreds.recoveryEmail || '');
+    broadcastSyncEvent({
+      type: 'ADMIN_CREDENTIALS_UPDATED',
+      adminCredentials: defaultCreds,
+      timestamp: Date.now(),
+    });
     setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
     setErrorMessage(null);
-    setSuccessMessage('Akun admin berhasil di-reset kembali ke bawaan (admin / admin123).');
+    setSuccessMessage(
+      'Akun admin berhasil di-reset kembali ke bawaan (admin / admin123) dan disinkronkan.'
+    );
     setShowResetConfirm(false);
   };
 
@@ -103,9 +145,9 @@ export const ChangePasswordSection: React.FC = () => {
       <div className="p-4 bg-blue-50 border border-blue-200 rounded-2xl flex items-start gap-3">
         <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
         <div className="text-xs text-blue-900 leading-relaxed">
-          <p className="font-bold">Keamanan Panel Admin</p>
+          <p className="font-bold">Keamanan Panel Admin & Kontak Reset Sandi</p>
           <p className="mt-0.5 text-blue-800">
-            Pastikan untuk mengganti password bawaan secara berkala demi menjaga keamanan data operasional antrean dan wewenang pemanggilan loket.
+            Daftarkan No. HP dan Email aktif untuk menerima kode verifikasi 6 angka apabila suatu saat Anda perlu melakukan Reset Kata Sandi.
           </p>
         </div>
       </div>
@@ -131,6 +173,65 @@ export const ChangePasswordSection: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Recovery Contact Card */}
+      <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h4 className="text-xs font-black uppercase text-slate-800">
+              Kontak Pemulihan Terdaftar (Reset Kata Sandi)
+            </h4>
+            <p className="text-[11px] text-slate-500">
+              Digunakan untuk verifikasi angka saat reset kata sandi dari halaman login.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-bold uppercase text-slate-600 mb-1">
+              No. HP Admin Terdaftar:
+            </label>
+            <div className="relative">
+              <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+              <input
+                type="tel"
+                placeholder="Contoh: 081234567890"
+                value={recoveryPhone}
+                onChange={(e) => setRecoveryPhone(e.target.value)}
+                className="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold uppercase text-slate-600 mb-1">
+              Email Admin Terdaftar:
+            </label>
+            <div className="relative">
+              <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+              <input
+                type="email"
+                placeholder="Contoh: admin@instansi.go.id"
+                value={recoveryEmail}
+                onChange={(e) => setRecoveryEmail(e.target.value)}
+                className="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={handleSaveRecoveryContacts}
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs transition cursor-pointer inline-flex items-center gap-1.5"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>Simpan Kontak Pemulihan</span>
+          </button>
+        </div>
+      </div>
 
       {/* Change Password Form */}
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -243,7 +344,11 @@ export const ChangePasswordSection: React.FC = () => {
               type="button"
               onClick={() => setShowConfirmPassword(!showConfirmPassword)}
               className="p-1 text-slate-400 hover:text-slate-600 absolute right-3 top-2.5 cursor-pointer"
-              aria-label={showConfirmPassword ? 'Sembunyikan konfirmasi password' : 'Lihat konfirmasi password'}
+              aria-label={
+                showConfirmPassword
+                  ? 'Sembunyikan konfirmasi password'
+                  : 'Lihat konfirmasi password'
+              }
             >
               {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
             </button>
@@ -276,9 +381,7 @@ export const ChangePasswordSection: React.FC = () => {
             <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mx-auto mb-3">
               <ShieldAlert className="w-6 h-6" />
             </div>
-            <h3 className="text-lg font-black text-slate-900 mb-1">
-              Reset Password Akun?
-            </h3>
+            <h3 className="text-lg font-black text-slate-900 mb-1">Reset Password Akun?</h3>
             <p className="text-xs text-slate-500 mb-6 leading-relaxed">
               Akun akan dikembalikan ke pengaturan awal:{' '}
               <br />

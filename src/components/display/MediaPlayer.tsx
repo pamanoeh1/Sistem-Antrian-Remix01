@@ -13,6 +13,13 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({ settings }) => {
 
   const slides = Array.isArray(settings?.slides) && settings.slides.length > 0 ? settings.slides : [];
 
+  // Keep slide index in bounds when slides array updates
+  useEffect(() => {
+    if (currentSlideIndex >= slides.length && slides.length > 0) {
+      setCurrentSlideIndex(0);
+    }
+  }, [slides.length, currentSlideIndex]);
+
   // Slideshow auto-advance timer
   useEffect(() => {
     if (settings.type !== 'slideshow' || isPaused || slides.length === 0) return;

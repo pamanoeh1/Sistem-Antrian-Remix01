@@ -32,6 +32,7 @@ export function addCounter(
   data: {
     name: string;
     operatorName: string;
+    operatorUsername?: string;
     supportedServiceIds: string[];
     status?: 'open' | 'closed' | 'break';
   }
@@ -50,6 +51,7 @@ export function addCounter(
     id: `loket-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     name: data.name.trim(),
     operatorName: data.operatorName.trim(),
+    ...(data.operatorUsername ? { operatorUsername: data.operatorUsername.trim() } : {}),
     supportedServiceIds: data.supportedServiceIds,
     currentTicketId: null,
     status: data.status || 'open',

@@ -10,6 +10,9 @@ import {
   pronounceQueueNumberIndonesian,
   formatIndonesianSpeechPhrase,
   filterQueues,
+  getCurrentServingTicketForCounter,
+  canCounterCallNext,
+  resolveTicketDestinationLabel,
 } from './queueLogic';
 import { ServiceCategory, Counter, QueueItem } from '../types/queue';
 
@@ -261,3 +264,192 @@ test('filterQueues works accurately with status, service, and search queries', (
   assert.equal(filterQueues(items, { searchTerm: 'kasir' }).length, 1);
   assert.equal(filterQueues(items, { searchTerm: 'tidak ada' }).length, 0);
 });
+
+test('skipped ticket recall correctly sets status to calling and increments callCount', () => {
+  const skippedTicket: QueueItem = {
+    id: 'skip-1',
+    number: 'A-010',
+    prefix: 'A',
+    sequenceNumber: 10,
+    serviceId: 'srv-1',
+    serviceName: 'Pelayanan Umum',
+    counterId: 'loket-1',
+    counterName: 'Loket 1',
+    status: 'skipped',
+    createdAt: '2026-10-21T01:00:00Z',
+    calledAt: '2026-10-21T01:10:00Z',
+    completedAt: null,
+    callCount: 1,
+  };
+
+  const recalled: QueueItem = {
+    ...skippedTicket,
+    status: 'calling',
+    counterId: mockCounter.id,
+    counterName: mockCounter.name,
+    callCount: skippedTicket.callCount + 1,
+    calledAt: new Date().toISOString(),
+  };
+
+  assert.equal(recalled.status, 'calling');
+  assert.equal(recalled.counterId, 'loket-1');
+  assert.equal(recalled.callCount, 2);
+  assert.notEqual(recalled.status, 'skipped');
+});
+
+test('canCounterCallNext forbids calling next ticket while an active ticket is being served or called until completed', () => {
+  const activeTicket: QueueItem = {
+    id: 'tkt-active',
+    number: 'A-001',
+    prefix: 'A',
+    sequenceNumber: 1,
+    serviceId: 'srv-1',
+    serviceName: 'Pelayanan Umum',
+    counterId: 'loket-1',
+    counterName: 'Loket 1',
+    status: 'calling',
+    createdAt: '2026-10-21T01:00:00Z',
+    calledAt: '2026-10-21T01:05:00Z',
+    completedAt: null,
+    callCount: 1,
+  };
+
+  const waitingTicket: QueueItem = {
+    id: 'tkt-waiting',
+    number: 'A-002',
+    prefix: 'A',
+    sequenceNumber: 2,
+    serviceId: 'srv-1',
+    serviceName: 'Pelayanan Umum',
+    counterId: null,
+    counterName: null,
+    status: 'waiting',
+    createdAt: '2026-10-21T01:06:00Z',
+    calledAt: null,
+    completedAt: null,
+    callCount: 0,
+  };
+
+  const counterWithActive: Counter = {
+    ...mockCounter,
+    currentTicketId: 'tkt-active',
+  };
+
+  // 1. While ticket is calling/serving, canCounterCallNext MUST return false
+  const resultBlocked = canCounterCallNext(counterWithActive, [activeTicket, waitingTicket]);
+  assert.equal(resultBlocked.canCall, false);
+  assert.equal(resultBlocked.activeTicket?.id, 'tkt-active');
+  assert.match(resultBlocked.reason || '', /masih berlangsung.*Selesai/i);
+
+  // 2. Also holds true if ticket was recalled from skipped (status: 'calling')
+  const recalledTicket: QueueItem = {
+    ...activeTicket,
+    id: 'tkt-recalled-from-skipped',
+    number: 'A-099',
+    status: 'calling',
+  };
+  const counterWithRecalled: Counter = {
+    ...mockCounter,
+    currentTicketId: 'tkt-recalled-from-skipped',
+  };
+  const resultRecalledBlocked = canCounterCallNext(counterWithRecalled, [recalledTicket, waitingTicket]);
+  assert.equal(resultRecalledBlocked.canCall, false);
+  assert.equal(resultRecalledBlocked.activeTicket?.number, 'A-099');
+
+  // 3. Once active ticket is completed (clicked 'Selesai'), canCounterCallNext MUST return true
+  const completedTicket: QueueItem = {
+    ...activeTicket,
+    status: 'completed',
+    completedAt: '2026-10-21T01:15:00Z',
+  };
+  const counterFree: Counter = {
+    ...mockCounter,
+    currentTicketId: null,
+  };
+  const resultAllowed = canCounterCallNext(counterFree, [completedTicket, waitingTicket]);
+  assert.equal(resultAllowed.canCall, true);
+  assert.equal(resultAllowed.activeTicket, null);
+});
+
+test('active ticket is reliably resolved by either currentTicketId or ticket counterId matching calling/serving state', () => {
+  const counter: Counter = {
+    ...mockCounter,
+    currentTicketId: null, // Simulated dropped currentTicketId due to phone sleep/reconnect
+  };
+
+  const activeTicket: QueueItem = {
+    id: 'tkt-active-1',
+    number: 'A-007',
+    prefix: 'A',
+    sequenceNumber: 7,
+    serviceId: 'srv-1',
+    serviceName: 'Pelayanan Umum',
+    counterId: 'loket-1',
+    counterName: 'Loket 1',
+    status: 'calling',
+    createdAt: '2026-10-21T01:00:00Z',
+    calledAt: '2026-10-21T01:05:00Z',
+    completedAt: null,
+    callCount: 1,
+  };
+
+  const found = [activeTicket].find(
+    (q) =>
+      (q.id === counter.currentTicketId || (counter && q.counterId === counter.id)) &&
+      (q.status === 'calling' || q.status === 'serving')
+  );
+
+  assert.ok(found);
+  assert.equal(found?.number, 'A-007');
+  assert.equal(found?.id, 'tkt-active-1');
+});
+
+test('resolveTicketDestinationLabel resolves assigned counter or matching open counters', () => {
+  const counters: Counter[] = [
+    {
+      id: 'loket-1',
+      name: 'Loket 1',
+      operatorName: 'Ahmad',
+      supportedServiceIds: ['srv-1'],
+      currentTicketId: null,
+      status: 'open',
+    },
+    {
+      id: 'loket-2',
+      name: 'Loket 2',
+      operatorName: 'Dewi',
+      supportedServiceIds: ['srv-2'],
+      currentTicketId: null,
+      status: 'open',
+    },
+    {
+      id: 'loket-3',
+      name: 'Loket 3',
+      operatorName: 'Budi',
+      supportedServiceIds: ['srv-1'],
+      currentTicketId: null,
+      status: 'open',
+    },
+  ];
+
+  // Assigned ticket counterName takes precedence
+  assert.equal(
+    resolveTicketDestinationLabel({ counterName: 'Loket 2', serviceId: 'srv-1' }, counters),
+    'Loket 2'
+  );
+
+  // Unassigned ticket resolves open counters supporting that service
+  assert.equal(
+    resolveTicketDestinationLabel({ counterName: null, serviceId: 'srv-1' }, counters),
+    'Loket 1 / Loket 3'
+  );
+
+  // Falls back cleanly if no counter supports service
+  assert.equal(
+    resolveTicketDestinationLabel({ counterName: null, serviceId: 'srv-unknown' }, counters),
+    'Loket Pelayanan'
+  );
+});
+
+
+

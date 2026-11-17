@@ -72,11 +72,13 @@ test('addCounter successfully adds counter and validates required fields', () =>
   const resultOk = addCounter(initialCounters, {
     name: 'Loket 3',
     operatorName: 'Siti Rahma',
+    operatorUsername: 'siti_rahma',
     supportedServiceIds: ['s-1', 's-2'],
   });
   assert.equal(resultOk.success, true);
   assert.equal(resultOk.updatedCounters.length, 3);
   assert.equal(resultOk.newCounter?.name, 'Loket 3');
+  assert.equal(resultOk.newCounter?.operatorUsername, 'siti_rahma');
 });
 
 test('updateCounter updates fields correctly', () => {

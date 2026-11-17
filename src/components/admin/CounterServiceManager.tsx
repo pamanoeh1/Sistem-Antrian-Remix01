@@ -9,6 +9,10 @@ import {
   deleteServiceCategory,
 } from '../../utils/counterServiceLogic';
 import {
+  PenjagaAccount,
+  syncPetugasWithCounterUpdate,
+} from '../../utils/authLogic';
+import {
   Plus,
   Pencil,
   Trash2,
@@ -24,26 +28,34 @@ import {
   Radio,
   Tag,
   ShieldAlert,
+  UserPlus,
 } from 'lucide-react';
 
 interface CounterServiceManagerProps {
   counters: Counter[];
   services: ServiceCategory[];
+  penjagaAccounts?: PenjagaAccount[];
   onUpdateCounters: (counters: Counter[]) => void;
   onUpdateServices: (services: ServiceCategory[]) => void;
+  onUpdatePenjagaAccounts?: (accounts: PenjagaAccount[], syncedCounters?: Counter[]) => void;
+  onOpenPetugasTab?: () => void;
 }
 
 export const CounterServiceManager: React.FC<CounterServiceManagerProps> = ({
   counters,
   services,
+  penjagaAccounts = [],
   onUpdateCounters,
   onUpdateServices,
+  onUpdatePenjagaAccounts,
+  onOpenPetugasTab,
 }) => {
   // Modal states for Counter
   const [isCounterModalOpen, setIsCounterModalOpen] = useState(false);
   const [editingCounter, setEditingCounter] = useState<Counter | null>(null);
   const [counterName, setCounterName] = useState('');
   const [counterOperator, setCounterOperator] = useState('');
+  const [counterOperatorUsername, setCounterOperatorUsername] = useState('');
   const [counterSupportedServices, setCounterSupportedServices] = useState<string[]>([]);
   const [counterStatus, setCounterStatus] = useState<'open' | 'closed' | 'break'>('open');
   const [counterError, setCounterError] = useState<string | null>(null);
@@ -68,7 +80,9 @@ export const CounterServiceManager: React.FC<CounterServiceManagerProps> = ({
   const handleOpenAddCounter = () => {
     setEditingCounter(null);
     setCounterName(`Loket ${counters.length + 1}`);
-    setCounterOperator('Petugas Baru');
+    const defaultAccount = penjagaAccounts[0];
+    setCounterOperatorUsername(defaultAccount?.username || '');
+    setCounterOperator(defaultAccount?.name || '');
     setCounterSupportedServices(services.map((s) => s.id));
     setCounterStatus('open');
     setCounterError(null);
@@ -78,26 +92,67 @@ export const CounterServiceManager: React.FC<CounterServiceManagerProps> = ({
   const handleOpenEditCounter = (c: Counter) => {
     setEditingCounter(c);
     setCounterName(c.name);
-    setCounterOperator(c.operatorName);
+    const matchedAccount = penjagaAccounts.find(
+      (p) =>
+        (c.operatorUsername && p.username === c.operatorUsername) ||
+        (c.operatorName && p.name.trim().toLowerCase() === c.operatorName.trim().toLowerCase()) ||
+        p.counterId === c.id
+    );
+    setCounterOperatorUsername(matchedAccount?.username || c.operatorUsername || '');
+    setCounterOperator(matchedAccount?.name || c.operatorName || '');
     setCounterSupportedServices(c.supportedServiceIds);
     setCounterStatus(c.status);
     setCounterError(null);
     setIsCounterModalOpen(true);
   };
 
+  const handleSelectOperatorChange = (selectedValue: string) => {
+    if (!selectedValue) {
+      setCounterOperatorUsername('');
+      setCounterOperator('');
+      return;
+    }
+    if (selectedValue.startsWith('__legacy__:')) {
+      setCounterOperatorUsername('');
+      setCounterOperator(selectedValue.replace('__legacy__:', ''));
+      return;
+    }
+    const found = penjagaAccounts.find((p) => p.username === selectedValue);
+    if (found) {
+      setCounterOperatorUsername(found.username);
+      setCounterOperator(found.name);
+    }
+  };
+
   const handleSaveCounter = (e: React.FormEvent) => {
     e.preventDefault();
     setCounterError(null);
+
+    if (!counterOperator.trim()) {
+      setCounterError('Pilih nama petugas operator dari daftar akun petugas terlebih dahulu.');
+      return;
+    }
 
     if (editingCounter) {
       const res = updateCounter(counters, editingCounter.id, {
         name: counterName,
         operatorName: counterOperator,
+        operatorUsername: counterOperatorUsername || undefined,
         supportedServiceIds: counterSupportedServices,
         status: counterStatus,
       });
       if (res.success) {
-        onUpdateCounters(res.updatedCounters);
+        if (onUpdatePenjagaAccounts && counterOperatorUsername) {
+          const syncedAccounts = syncPetugasWithCounterUpdate(
+            penjagaAccounts,
+            editingCounter.id,
+            counterOperatorUsername,
+            counterOperator
+          );
+          onUpdatePenjagaAccounts(syncedAccounts, res.updatedCounters);
+        } else {
+          onUpdateCounters(res.updatedCounters);
+        }
         setIsCounterModalOpen(false);
       } else {
         setCounterError(res.error || 'Gagal memperbarui loket');
@@ -106,11 +161,22 @@ export const CounterServiceManager: React.FC<CounterServiceManagerProps> = ({
       const res = addCounter(counters, {
         name: counterName,
         operatorName: counterOperator,
+        operatorUsername: counterOperatorUsername || undefined,
         supportedServiceIds: counterSupportedServices,
         status: counterStatus,
       });
-      if (res.success) {
-        onUpdateCounters(res.updatedCounters);
+      if (res.success && res.newCounter) {
+        if (onUpdatePenjagaAccounts && counterOperatorUsername) {
+          const syncedAccounts = syncPetugasWithCounterUpdate(
+            penjagaAccounts,
+            res.newCounter.id,
+            counterOperatorUsername,
+            counterOperator
+          );
+          onUpdatePenjagaAccounts(syncedAccounts, res.updatedCounters);
+        } else {
+          onUpdateCounters(res.updatedCounters);
+        }
         setIsCounterModalOpen(false);
       } else {
         setCounterError(res.error || 'Gagal menambahkan loket');
@@ -461,17 +527,70 @@ export const CounterServiceManager: React.FC<CounterServiceManagerProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase text-slate-600 mb-1">
-                  Nama Petugas Operator:
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Contoh: Rian Hidayat"
-                  value={counterOperator}
-                  onChange={(e) => setCounterOperator(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold uppercase text-slate-600">
+                    Nama Petugas Operator:
+                  </label>
+                  {onOpenPetugasTab && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCounterModalOpen(false);
+                        onOpenPetugasTab();
+                      }}
+                      className="text-[11px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer"
+                    >
+                      <UserPlus className="w-3 h-3" />
+                      <span>Kelola Akun Petugas</span>
+                    </button>
+                  )}
+                </div>
+
+                {penjagaAccounts.length > 0 ? (
+                  <select
+                    required
+                    value={
+                      counterOperatorUsername
+                        ? counterOperatorUsername
+                        : counterOperator
+                        ? `__legacy__:${counterOperator}`
+                        : ''
+                    }
+                    onChange={(e) => handleSelectOperatorChange(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                  >
+                    <option value="">-- Pilih Akun Petugas Terdaftar --</option>
+                    {penjagaAccounts.map((acc) => (
+                      <option key={acc.username} value={acc.username}>
+                        {acc.name} (@{acc.username})
+                      </option>
+                    ))}
+                    {!counterOperatorUsername && counterOperator && (
+                      <option value={`__legacy__:${counterOperator}`}>
+                        {counterOperator} (Belum tertaut ke akun)
+                      </option>
+                    )}
+                  </select>
+                ) : (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 space-y-2">
+                    <p className="font-semibold">
+                      Belum ada akun petugas terdaftar. Tambahkan akun di menu <strong>Akun Petugas</strong> terlebih dahulu agar dapat dipilih di sini.
+                    </p>
+                    {onOpenPetugasTab && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsCounterModalOpen(false);
+                          onOpenPetugasTab();
+                        }}
+                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" />
+                        <span>Buka Menu Akun Petugas</span>
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div>

@@ -54,6 +54,7 @@ export function getNavAuthLabel(userSession?: UserSession | null): {
 }
 
 export const NAV_AUTO_HIDE_DELAY_MS = 5000;
+export const TOP_REVEAL_ZONE_PX = 44;
 
 export function shouldAutoHideNav(
   idleTimeMs: number,
@@ -62,15 +63,35 @@ export function shouldAutoHideNav(
   return idleTimeMs >= timeoutMs;
 }
 
+export function isCursorInTopRevealZone(
+  clientY: number,
+  thresholdPx: number = TOP_REVEAL_ZONE_PX
+): boolean {
+  return Number.isFinite(clientY) && clientY >= 0 && clientY <= thresholdPx;
+}
+
+export function shouldWakeNavOnMouseMove(
+  clientY: number,
+  isFullscreenLocked: boolean = false,
+  thresholdPx: number = TOP_REVEAL_ZONE_PX
+): boolean {
+  if (isFullscreenLocked) return false;
+  return isCursorInTopRevealZone(clientY, thresholdPx);
+}
+
 export function isNavVisible({
   isIdle,
   isHovered,
   isExpanded,
+  isFullscreenLocked = false,
 }: {
   isIdle: boolean;
   isHovered: boolean;
   isExpanded?: boolean;
+  isFullscreenLocked?: boolean;
 }): boolean {
+  if (isFullscreenLocked) return false;
   if (isHovered) return true;
+  void isExpanded;
   return !isIdle;
 }

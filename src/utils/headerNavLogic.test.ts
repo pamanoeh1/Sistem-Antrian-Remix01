@@ -5,6 +5,9 @@ import {
   getNavAuthLabel,
   shouldAutoHideNav,
   isNavVisible,
+  TOP_REVEAL_ZONE_PX,
+  isCursorInTopRevealZone,
+  shouldWakeNavOnMouseMove,
 } from './headerNavLogic';
 import { UserSession } from './authLogic';
 
@@ -83,18 +86,23 @@ test('shouldAutoHideNav correctly identifies when idle time exceeds threshold', 
   assert.equal(shouldAutoHideNav(6500), true);
 });
 
-test('isNavVisible hides floating nav after idle timeout unless hovered', () => {
-  // When idle and not hovered, nav hides even if expanded
+test('isCursorInTopRevealZone and shouldWakeNavOnMouseMove reveal only near the top menu area', () => {
+  assert.equal(isCursorInTopRevealZone(0), true);
+  assert.equal(isCursorInTopRevealZone(TOP_REVEAL_ZONE_PX), true);
+  assert.equal(isCursorInTopRevealZone(TOP_REVEAL_ZONE_PX + 1), false);
+  assert.equal(isCursorInTopRevealZone(450), false);
+
+  assert.equal(shouldWakeNavOnMouseMove(15, false), true);
+  assert.equal(shouldWakeNavOnMouseMove(220, false), false);
+  assert.equal(shouldWakeNavOnMouseMove(15, true), false); // Locked during fullscreen
+});
+
+test('isNavVisible hides floating nav after idle timeout unless hovered, and always hides in fullscreen', () => {
   assert.equal(isNavVisible({ isIdle: true, isHovered: false, isExpanded: true }), false);
-  
-  // When hovered, always visible even if idle
   assert.equal(isNavVisible({ isIdle: true, isHovered: true, isExpanded: false }), true);
   assert.equal(isNavVisible({ isIdle: true, isHovered: true, isExpanded: true }), true);
-
-  // When not idle, visible
   assert.equal(isNavVisible({ isIdle: false, isHovered: false, isExpanded: false }), true);
   assert.equal(isNavVisible({ isIdle: false, isHovered: false, isExpanded: true }), true);
-
-  // When idle, not hovered, and collapsed: hidden
   assert.equal(isNavVisible({ isIdle: true, isHovered: false, isExpanded: false }), false);
+  assert.equal(isNavVisible({ isIdle: false, isHovered: true, isFullscreenLocked: true }), false);
 });

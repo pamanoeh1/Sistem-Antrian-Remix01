@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   QueueItem,
   Counter,
@@ -11,6 +11,7 @@ import {
   getNextWaitingTicketForCounter,
   filterQueues,
 } from '../../utils/queueLogic';
+import { testAudioCall } from '../../utils/audioVoice';
 import { ThermalTicket } from '../kiosk/ThermalTicket';
 import {
   Megaphone,
@@ -29,7 +30,11 @@ import {
   ShieldCheck,
   Search,
   AlertTriangle,
+  AlertCircle,
+  Lock,
+  Globe,
 } from 'lucide-react';
+import { useQueueSocket } from '../../hooks/useQueueSocket';
 
 interface PenjagaViewProps {
   queues: QueueItem[];
@@ -40,6 +45,7 @@ interface PenjagaViewProps {
   activeTicket: QueueItem | null;
   currentCounterId?: string;
   penjagaName?: string;
+  userRole?: 'server' | 'penjaga';
   onCallTicket: (ticket: QueueItem, counter: Counter) => void;
   onRecallTicket: (ticket: QueueItem, counter: Counter) => void;
   onCompleteTicket: (ticket: QueueItem) => void;
@@ -59,6 +65,7 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
   activeTicket,
   currentCounterId,
   penjagaName,
+  userRole = 'penjaga',
   onCallTicket,
   onRecallTicket,
   onCompleteTicket,
@@ -68,9 +75,16 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
   onLogout,
   onNavigateDisplay,
 }) => {
-  const [selectedCounterId, setSelectedCounterId] = useState<string>(
-    currentCounterId || counters[0]?.id || 'loket-1'
-  );
+  // If penjaga role, lock to currentCounterId
+  const effectiveCounterId =
+    userRole === 'penjaga' && currentCounterId
+      ? currentCounterId
+      : currentCounterId || counters[0]?.id || 'loket-1';
+
+  const [selectedCounterId, setSelectedCounterId] = useState<string>(effectiveCounterId);
+  const [isPlayingSound, setIsPlayingSound] = useState(false);
+
+  const { syncStatus } = useQueueSocket({ role: 'counter', counterId: effectiveCounterId });
   const [ticketToPrint, setTicketToPrint] = useState<QueueItem | null>(null);
   const [showManualModal, setShowManualModal] = useState<boolean>(false);
   const [manualCallInput, setManualCallInput] = useState<string>('');
@@ -83,9 +97,33 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
 
   const currentServingTicket = queues.find(
     (q) =>
-      q.id === currentCounter?.currentTicketId &&
+      (q.id === currentCounter?.currentTicketId ||
+        (currentCounter && q.counterId === currentCounter.id)) &&
       (q.status === 'calling' || q.status === 'serving')
   );
+
+  // Self-heal: ensure counter's currentTicketId matches active calling ticket if lost during reconnect or sleep
+  useEffect(() => {
+    if (
+      currentServingTicket &&
+      currentCounter &&
+      currentCounter.currentTicketId !== currentServingTicket.id
+    ) {
+      const healed = counters.map((c) =>
+        c.id === currentCounter.id
+          ? { ...c, currentTicketId: currentServingTicket.id, status: 'open' as const }
+          : c
+      );
+      onUpdateCounters(healed);
+    }
+  }, [currentServingTicket?.id, currentCounter?.id, currentCounter?.currentTicketId]);
+
+  // Keep selectedCounterId locked to effectiveCounterId when role is penjaga
+  useEffect(() => {
+    if (userRole === 'penjaga' && effectiveCounterId && selectedCounterId !== effectiveCounterId) {
+      setSelectedCounterId(effectiveCounterId);
+    }
+  }, [userRole, effectiveCounterId, selectedCounterId]);
 
   const nextWaitingForThisCounter = currentCounter
     ? getNextWaitingTicketForCounter(currentCounter, queues)
@@ -117,6 +155,15 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
     (q) => q.counterId === currentCounter?.id && q.status === 'completed'
   );
 
+  const handleCheckSound = async () => {
+    setIsPlayingSound(true);
+    try {
+      await testAudioCall('A-001', currentCounter?.name || 'Loket 1', audioSettings);
+    } finally {
+      setIsPlayingSound(false);
+    }
+  };
+
   const handleToggleCounterStatus = (status: 'open' | 'break' | 'closed') => {
     if (!currentCounter) return;
     const updated = counters.map((c) =>
@@ -127,6 +174,12 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
 
   const handleCallNext = () => {
     if (!currentCounter) return;
+    if (currentServingTicket) {
+      alert(
+        `Antrean ${currentServingTicket.number} masih berlangsung di loket ini. Harap klik tombol "Selesai" (atau "Lewati") terlebih dahulu sebelum memanggil antrean berikutnya.`
+      );
+      return;
+    }
     if (currentCounter.status !== 'open') {
       handleToggleCounterStatus('open');
     }
@@ -134,6 +187,36 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
       onCallTicket(nextWaitingForThisCounter, currentCounter);
     } else {
       alert(`Tidak ada antrean yang sedang menunggu untuk ${currentCounter.name}`);
+    }
+  };
+
+  const handleCallSpecificTicket = (ticket: QueueItem) => {
+    if (currentServingTicket) {
+      alert(
+        `Antrean ${currentServingTicket.number} masih berlangsung di loket ini. Harap klik tombol "Selesai" (atau "Lewati") terlebih dahulu sebelum memanggil antrean lain.`
+      );
+      return;
+    }
+    if (currentCounter && currentCounter.status !== 'open') {
+      handleToggleCounterStatus('open');
+    }
+    if (currentCounter) {
+      onCallTicket(ticket, currentCounter);
+    }
+  };
+
+  const handleRecallSkippedTicket = (ticket: QueueItem) => {
+    if (currentServingTicket && currentServingTicket.id !== ticket.id) {
+      alert(
+        `Antrean ${currentServingTicket.number} masih berlangsung di loket ini. Harap selesaikan ("Selesai") antrean tersebut terlebih dahulu sebelum memanggil kembali antrean lain.`
+      );
+      return;
+    }
+    if (currentCounter && currentCounter.status !== 'open') {
+      handleToggleCounterStatus('open');
+    }
+    if (currentCounter) {
+      onRecallTicket(ticket, currentCounter);
     }
   };
 
@@ -158,13 +241,20 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualCallInput.trim() || !currentCounter) return;
+    if (currentServingTicket) {
+      alert(
+        `Antrean ${currentServingTicket.number} masih berlangsung di loket ini. Harap klik tombol "Selesai" terlebih dahulu sebelum melakukan panggilan manual.`
+      );
+      return;
+    }
     onManualCall(manualCallInput.trim().toUpperCase(), currentCounter);
     setManualCallInput('');
     setShowManualModal(false);
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-800 pb-16">
+    <>
+      <div className="no-print min-h-screen bg-slate-100 text-slate-800 pb-16">
       {/* Header bar khusus Penjaga Loket */}
       <div className="bg-white border-b border-slate-200 shadow-xs px-4 sm:px-8 py-3.5 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -190,20 +280,44 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
 
           {/* Quick Counter Selector & Status */}
           <div className="flex flex-wrap items-center gap-2.5">
-            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-300 rounded-xl p-1.5 px-3">
-              <span className="text-xs font-bold text-slate-600 uppercase shrink-0">Loket:</span>
-              <select
-                value={selectedCounterId}
-                onChange={(e) => setSelectedCounterId(e.target.value)}
-                className="bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
-              >
-                {counters.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} — {c.operatorName}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {userRole === 'penjaga' ? (
+              <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-300 rounded-xl p-1.5 px-3">
+                <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span className="text-xs font-bold text-emerald-950">
+                  {currentCounter?.name} — {currentCounter?.operatorName || penjagaName}
+                </span>
+                <span className="text-[10px] bg-emerald-200 text-emerald-900 font-extrabold px-1.5 py-0.2 rounded shrink-0">
+                  Terkunci
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-300 rounded-xl p-1.5 px-3">
+                <span className="text-xs font-bold text-slate-600 uppercase shrink-0">Loket:</span>
+                <select
+                  value={selectedCounterId}
+                  onChange={(e) => setSelectedCounterId(e.target.value)}
+                  className="bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                >
+                  {counters.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} — {c.operatorName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Cek Suara Button */}
+            <button
+              type="button"
+              onClick={handleCheckSound}
+              disabled={isPlayingSound}
+              className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200 hover:border-blue-300 transition text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              title="Uji Speaker / Cek Suara Panggilan"
+            >
+              <Volume2 className={`w-3.5 h-3.5 text-blue-600 ${isPlayingSound ? 'animate-bounce' : ''}`} />
+              <span>{isPlayingSound ? 'Memutar...' : 'Cek Suara'}</span>
+            </button>
 
             {/* Counter Status Buttons */}
             <div className="flex bg-slate-100 p-1 rounded-xl text-xs font-bold border border-slate-200">
@@ -444,17 +558,48 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
               )}
             </div>
 
+            {/* Banner Antrean Aktif yang Mewajibkan Klik Selesai */}
+            {currentServingTicket && (
+              <div className="mt-6 mb-1 bg-amber-50 border border-amber-300 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900 shadow-xs">
+                <div className="flex items-center gap-2.5">
+                  <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                  <p className="text-xs sm:text-sm font-medium leading-relaxed">
+                    Antrean <span className="font-mono font-black text-amber-950 bg-amber-200/80 px-2 py-0.5 rounded-md">{currentServingTicket.number}</span> sedang berlangsung di loket ini. Panggilan berikutnya dikunci hingga Anda mengklik <span className="font-bold underline decoration-amber-600">"Selesai"</span> (atau "Lewati").
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleComplete}
+                  className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-black text-white text-xs font-bold shrink-0 cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95 transition"
+                  title="Klik untuk menyelesaikan transaksi antrean ini"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  <span>Selesaikan Sekarang</span>
+                </button>
+              </div>
+            )}
+
             {/* Action Buttons */}
-            <div className="mt-8 pt-6 border-t border-slate-100 space-y-3">
+            <div className="mt-6 pt-5 border-t border-slate-100 space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {/* Panggil Berikutnya */}
                 <button
                   type="button"
                   onClick={handleCallNext}
-                  className="py-4 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-sm transition shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                  disabled={Boolean(currentServingTicket)}
+                  className={`py-4 px-4 rounded-2xl font-black text-sm transition shadow-md flex items-center justify-center gap-2 ${
+                    currentServingTicket
+                      ? 'bg-slate-200 text-slate-400 border border-slate-300 shadow-none cursor-not-allowed opacity-80'
+                      : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20 cursor-pointer active:scale-95'
+                  }`}
+                  title={
+                    currentServingTicket
+                      ? `Selesaikan antrean ${currentServingTicket.number} terlebih dahulu sebelum memanggil antrean berikutnya`
+                      : 'Panggil antrean berikutnya'
+                  }
                 >
-                  <Megaphone className="w-5 h-5 animate-pulse" />
-                  <span>Panggil Antrean Berikutnya</span>
+                  <Megaphone className={`w-5 h-5 ${currentServingTicket ? '' : 'animate-pulse'}`} />
+                  <span>{currentServingTicket ? `Kunci: Selesaikan ${currentServingTicket.number}` : 'Panggil Antrean Berikutnya'}</span>
                 </button>
 
                 {/* Panggil Ulang */}
@@ -463,6 +608,7 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
                   onClick={handleRecall}
                   disabled={!currentServingTicket}
                   className="py-4 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-2xl font-bold text-sm transition shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed active:scale-95"
+                  title="Panggil ulang nomor antrean yang sedang aktif"
                 >
                   <RotateCcw className="w-4 h-4" />
                   <span>Panggil Ulang (Recall)</span>
@@ -475,9 +621,14 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
                   type="button"
                   onClick={handleComplete}
                   disabled={!currentServingTicket}
-                  className="py-3 px-3 bg-slate-900 hover:bg-black disabled:bg-slate-100 disabled:text-slate-400 text-white rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                  className={`py-3 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed ${
+                    currentServingTicket
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-600/20 ring-2 ring-emerald-400 animate-pulse'
+                      : 'bg-slate-900 hover:bg-black disabled:bg-slate-100 disabled:text-slate-400 text-white'
+                  }`}
+                  title={currentServingTicket ? 'Tandai transaksi ini rampung / selesai' : 'Tidak ada antrean aktif'}
                 >
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  <CheckCircle2 className="w-4 h-4 text-emerald-300" />
                   <span>Selesai</span>
                 </button>
 
@@ -487,6 +638,7 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
                   onClick={handleSkip}
                   disabled={!currentServingTicket}
                   className="py-3 px-3 bg-rose-50 hover:bg-rose-100 disabled:bg-slate-100 text-rose-700 disabled:text-slate-400 border border-rose-200 disabled:border-transparent rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                  title="Lewati antrean ini jika pengunjung tidak hadir"
                 >
                   <SkipForward className="w-4 h-4" />
                   <span>Lewati</span>
@@ -497,6 +649,7 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
                   type="button"
                   onClick={() => setShowManualModal(true)}
                   className="py-3 px-3 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                  title="Panggil nomor antrean kustom secara manual"
                 >
                   <PhoneCall className="w-4 h-4 text-blue-600" />
                   <span>Panggil Manual</span>
@@ -597,8 +750,18 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
                             <div className="flex items-center gap-1.5">
                               <button
                                 type="button"
-                                onClick={() => onCallTicket(tkt, currentCounter)}
-                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs"
+                                onClick={() => handleCallSpecificTicket(tkt)}
+                                disabled={Boolean(currentServingTicket)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-xs ${
+                                  currentServingTicket
+                                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
+                                }`}
+                                title={
+                                  currentServingTicket
+                                    ? `Selesaikan antrean ${currentServingTicket.number} terlebih dahulu`
+                                    : 'Panggil antrean ini'
+                                }
                               >
                                 Panggil
                               </button>
@@ -661,8 +824,18 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
                             <div className="flex items-center gap-1.5">
                               <button
                                 type="button"
-                                onClick={() => onRecallTicket(tkt, currentCounter)}
-                                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs flex items-center gap-1"
+                                onClick={() => handleRecallSkippedTicket(tkt)}
+                                disabled={Boolean(currentServingTicket && currentServingTicket.id !== tkt.id)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-xs flex items-center gap-1 ${
+                                  currentServingTicket && currentServingTicket.id !== tkt.id
+                                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                                    : 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer'
+                                }`}
+                                title={
+                                  currentServingTicket && currentServingTicket.id !== tkt.id
+                                    ? `Selesaikan antrean ${currentServingTicket.number} terlebih dahulu`
+                                    : 'Panggil Kembali ke Meja Loket'
+                                }
                               >
                                 <RotateCcw className="w-3.5 h-3.5" />
                                 <span>Panggil Kembali</span>
@@ -687,7 +860,28 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
 
             {/* Bottom info link */}
             <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-              <span className="text-[11px]">Sistem Sinkron Otomatis (LAN)</span>
+              <div className="flex items-center gap-1.5" title={syncStatus.details}>
+                <span
+                  className={`w-2 h-2 rounded-full shrink-0 ${
+                    syncStatus.connected
+                      ? syncStatus.engine === 'php'
+                        ? 'bg-sky-500 animate-pulse'
+                        : 'bg-emerald-500'
+                      : 'bg-rose-500'
+                  }`}
+                />
+                <span
+                  className={`text-[11px] font-bold ${
+                    syncStatus.connected
+                      ? syncStatus.engine === 'php'
+                        ? 'text-sky-700'
+                        : 'text-emerald-700'
+                      : 'text-rose-600'
+                  }`}
+                >
+                  {syncStatus.label}
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={onNavigateDisplay}
@@ -742,17 +936,33 @@ export const PenjagaView: React.FC<PenjagaViewProps> = ({
           </div>
         </div>
       )}
+      </div>
 
       {/* Thermal Print Modal */}
       {ticketToPrint && (
-        <ThermalTicket
-          ticket={ticketToPrint}
-          company={company}
-          waitingAhead={0}
-          estimatedMinutes={5}
-          onClose={() => setTicketToPrint(null)}
-        />
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto print:static print:bg-white print:p-0 print:block">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 print:shadow-none print:border-0 print:p-0 print:rounded-none print:max-w-none">
+            <div className="no-print flex justify-between items-center mb-4 pb-2 border-b border-slate-200">
+              <h3 className="font-bold text-sm text-slate-900">Cetak Ulang Tiket Thermal</h3>
+              <button
+                type="button"
+                onClick={() => setTicketToPrint(null)}
+                className="text-slate-400 hover:text-slate-700 text-xs font-bold cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+            <ThermalTicket
+              ticket={ticketToPrint}
+              company={company}
+              counters={counters}
+              waitingAhead={0}
+              estimatedMinutes={5}
+              onClose={() => setTicketToPrint(null)}
+            />
+          </div>
+        </div>
       )}
-    </div>
+    </>
   );
 };

@@ -41,9 +41,13 @@ import { verifyGuidePassword } from '../../utils/helpGuideAuth';
 
 interface HelpGuideModalProps {
   onNavigatePage?: (page: ActivePage) => void;
+  hiddenInFullscreen?: boolean;
 }
 
-export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({ onNavigatePage }) => {
+export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({
+  onNavigatePage,
+  hiddenInFullscreen = false,
+}) => {
   // Modal states
   const [isOpen, setIsOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -52,9 +56,12 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({ onNavigatePage }
   const [showPassword, setShowPassword] = useState(false);
   const [isUnlocked, setIsUnlocked] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'steps' | 'xampp' | 'roles' | 'features' | 'faq'>('steps');
+  const [activeTab, setActiveTab] = useState<
+    'steps' | 'xampp' | 'infinityfree' | 'roles' | 'features' | 'faq'
+  >('steps');
   const [completedSteps, setCompletedSteps] = useState<number[]>([1]);
   const [copiedHtaccess, setCopiedHtaccess] = useState(false);
+  const [copiedPhpCode, setCopiedPhpCode] = useState(false);
 
   // Close on Escape key
   useEffect(() => {
@@ -115,14 +122,30 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({ onNavigatePage }
           setTimeout(() => setCopiedHtaccess(false), 2500);
         })
         .catch(() => {
-          fallbackCopyText(htaccessContent);
+          fallbackCopyText(htaccessContent, 'htaccess');
         });
     } else {
-      fallbackCopyText(htaccessContent);
+      fallbackCopyText(htaccessContent, 'htaccess');
     }
   };
 
-  const fallbackCopyText = (text: string) => {
+  const handleCopyPhpCode = (code: string) => {
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(code)
+        .then(() => {
+          setCopiedPhpCode(true);
+          setTimeout(() => setCopiedPhpCode(false), 2500);
+        })
+        .catch(() => {
+          fallbackCopyText(code, 'php');
+        });
+    } else {
+      fallbackCopyText(code, 'php');
+    }
+  };
+
+  const fallbackCopyText = (text: string, type: 'htaccess' | 'php' = 'htaccess') => {
     try {
       const textarea = document.createElement('textarea');
       textarea.value = text;
@@ -132,8 +155,13 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({ onNavigatePage }
       textarea.select();
       document.execCommand('copy');
       document.body.removeChild(textarea);
-      setCopiedHtaccess(true);
-      setTimeout(() => setCopiedHtaccess(false), 2500);
+      if (type === 'htaccess') {
+        setCopiedHtaccess(true);
+        setTimeout(() => setCopiedHtaccess(false), 2500);
+      } else {
+        setCopiedPhpCode(true);
+        setTimeout(() => setCopiedPhpCode(false), 2500);
+      }
     } catch {
       // Ignore
     }
@@ -243,6 +271,10 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({ onNavigatePage }
     },
   ];
 
+  if (hiddenInFullscreen) {
+    return null;
+  }
+
   return (
     <>
       {/* Floating Action Button (FAB) Bottom-Right with Lightbulb */}
@@ -285,7 +317,7 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({ onNavigatePage }
 
       {/* Password Authentication Modal */}
       {isAuthModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+        <div className="no-print fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div
             className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-200"
             role="dialog"
@@ -393,7 +425,7 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({ onNavigatePage }
 
       {/* Guide Modal Overlay */}
       {isOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-in fade-in duration-200">
+        <div className="no-print fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-in fade-in duration-200">
           <div
             className="bg-white rounded-3xl max-w-4xl w-full shadow-2xl border border-slate-200 flex flex-col max-h-[90vh] overflow-hidden animate-in zoom-in-95 duration-200"
             role="dialog"
@@ -474,6 +506,19 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({ onNavigatePage }
               >
                 <Globe className="w-4 h-4 text-amber-600" />
                 <span className="font-black text-amber-900">Panduan XAMPP & Web Server</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('infinityfree')}
+                className={`py-3 px-4 font-bold text-xs border-b-2 transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+                  activeTab === 'infinityfree'
+                    ? 'border-emerald-600 text-emerald-700 bg-white'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <Network className="w-4 h-4 text-emerald-600" />
+                <span className="font-black text-emerald-900">Solusi InfinityFree & Cloud</span>
               </button>
 
               <button
@@ -892,6 +937,158 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({ onNavigatePage }
                         Aplikasi langsung dapat diakses oleh perangkat lain di port 3000: <code>http://[IP-PC-SERVER]:3000/</code>.
                       </p>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB: PANDUAN INFINITYFREE & CLOUD WEB HOSTING */}
+              {activeTab === 'infinityfree' && (
+                <div className="space-y-6">
+                  {/* Hero Box */}
+                  <div className="p-5 rounded-3xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-700 text-white shadow-md space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-0.5 rounded-full bg-white/20 text-white text-[10px] font-black uppercase tracking-wider backdrop-blur-xs">
+                        Hosting Publik & Cloud
+                      </span>
+                      <span className="text-emerald-100 text-xs">• InfinityFree / cPanel / Shared Hosting</span>
+                    </div>
+                    <h3 className="text-base sm:text-xl font-black text-white">
+                      Solusi Mengatasi Status Offline & Sinkronisasi di InfinityFree
+                    </h3>
+                    <p className="text-xs sm:text-sm text-emerald-100 leading-relaxed">
+                      Sistem antrean ini telah dilengkapi dengan <strong>Hybrid Sync Engine</strong> cerdas yang mendukung PHP HTTP Polling bawaan dan WebSocket Relay. Anda dapat menghubungkan TV Display, HP Meja Loket, Kios Tiket, dan Admin di mana saja melalui InfinityFree secara gratis!
+                    </p>
+                  </div>
+
+                  {/* Penjelasan Masalah */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 space-y-2">
+                    <div className="flex items-center gap-2 font-black text-xs sm:text-sm text-amber-900">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>Mengapa Status Menjadi "Offline" Saat Awal Diunggah ke InfinityFree?</span>
+                    </div>
+                    <p className="text-xs text-amber-800 leading-relaxed">
+                      InfinityFree adalah web hosting shared berbasis <strong>Apache dan PHP</strong>. InfinityFree <strong>tidak mendukung proses daemon Node.js background</strong> (<code className="bg-amber-100 px-1 py-0.2 rounded font-mono text-[11px]">node server.ts</code>) dan <strong>memblokir koneksi raw WebSocket</strong>. Ketika aplikasi mencoba menghubungi server WebSocket di domain InfinityFree Anda, server mengembalikan respon 404/503 sehingga sistem otomatis berpindah ke mode lokal (offline).
+                    </p>
+                  </div>
+
+                  {/* SOLUSI 1: PHP Sync Engine (Otomatis & Bawaan) */}
+                  <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-black text-xs shrink-0 shadow-xs">
+                        1
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-black uppercase tracking-wider text-emerald-600">Solusi Utama (Rekomendasi & 100% Gratis)</span>
+                        <h4 className="font-black text-sm text-slate-900 flex items-center gap-2">
+                          <Cpu className="w-4 h-4 text-emerald-600" />
+                          <span>Gunakan PHP Sync Engine Bawaan (Sudah Disediakan)</span>
+                        </h4>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-slate-600 leading-relaxed pl-12">
+                      Aplikasi ini sudah kami bekali backend sinkronisasi PHP mandiri (<code className="bg-slate-100 px-1.5 py-0.5 rounded font-mono font-bold text-slate-800">api/sync.php</code>) yang berjalan native di InfinityFree tanpa perlu database MySQL tambahan.
+                    </p>
+
+                    <div className="pl-12 space-y-3 text-xs text-slate-600">
+                      <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
+                        <span className="font-bold text-slate-900 block">Langkah Unggah ke InfinityFree:</span>
+                        <ol className="list-decimal list-inside space-y-1.5 text-slate-700">
+                          <li>Jalankan <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[11px]">npm run build</code> di komputer Anda.</li>
+                          <li>Buka <strong>Control Panel / File Manager</strong> akun InfinityFree Anda.</li>
+                          <li>Buka folder <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[11px]">htdocs/</code>.</li>
+                          <li>Unggah semua file hasil build yang berada di dalam folder <strong>dist/</strong> ke dalam folder <strong>htdocs/</strong>:
+                            <ul className="list-disc list-inside pl-4 mt-1 text-slate-600 text-[11px] space-y-0.5">
+                              <li><code>index.html</code></li>
+                              <li>folder <code>assets/</code></li>
+                              <li>folder <code>api/</code> (berisi <code>sync.php</code>)</li>
+                              <li>file <code>sync.php</code> di root</li>
+                              <li>file <code>.htaccess</code> (konfigurasi rewrite URL & CORS)</li>
+                            </ul>
+                          </li>
+                          <li>Pastikan permissions folder <code>htdocs/api/</code> dapat ditulis (writeable / 755 atau 777) agar file penyimpanan antrean <code>queue_sync_data.json</code> dapat dibuat otomatis oleh PHP.</li>
+                        </ol>
+                      </div>
+
+                      <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-emerald-950 flex items-start gap-2.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
+                        <div className="text-[11px] leading-relaxed">
+                          <strong>Hasil di Layar:</strong> Di pojok TV Display dan Meja Loket, indikator akan berubah menjadi warna hijau menyala: <br />
+                          <span className="inline-block mt-1 font-mono font-bold bg-white text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-md">
+                            🟢 Tersinkron (PHP Hosting • InfinityFree)
+                          </span><br />
+                          Semua panggilan dari HP loket akan langsung muncul di TV Display dalam hitungan detik!
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SOLUSI 2: Cloud WebSocket Relay (Render.com / Railway) */}
+                  <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black text-xs shrink-0 shadow-xs">
+                        2
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-black uppercase tracking-wider text-blue-600">Solusi Alternatif (Kecepatan Instan &lt;50ms)</span>
+                        <h4 className="font-black text-sm text-slate-900 flex items-center gap-2">
+                          <Network className="w-4 h-4 text-blue-600" />
+                          <span>Hubungkan ke Cloud WebSocket Relay Gratis (Render / Railway)</span>
+                        </h4>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-slate-600 leading-relaxed pl-12">
+                      Jika Anda menginginkan panggilan suara dan nomor antrean terpanggil secara instan tanpa jeda polling (kecepatan &lt;50ms), Anda dapat menempatkan server Node.js di layanan hosting cloud gratis seperti <strong>Render.com</strong>, <strong>Railway.app</strong>, atau <strong>Fly.io</strong>.
+                    </p>
+
+                    <div className="pl-12 space-y-2.5 text-xs text-slate-600">
+                      <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
+                        <span className="font-bold text-slate-900 block">Cara Menghubungkan:</span>
+                        <ol className="list-decimal list-inside space-y-1.5 text-slate-700">
+                          <li>Deploy repositori ini ke <strong>Render.com</strong> sebagai <em>Web Service</em> (Pilih Node.js, Build Command: <code className="font-mono text-[11px] bg-slate-200 px-1">npm install && npm run build</code>, Start Command: <code className="font-mono text-[11px] bg-slate-200 px-1">node server.ts</code>).</li>
+                          <li>Dapatkan URL publik dari Render, contoh: <code className="font-mono text-[11px] text-blue-700 font-bold">https://antrean-publik.onrender.com</code>.</li>
+                          <li>Buka web antrean Anda di InfinityFree sebagai Admin (<code className="font-mono text-[11px]">/?view=admin</code>).</li>
+                          <li>Masuk ke tab <strong>"Jaringan & Sinkronisasi"</strong>.</li>
+                          <li>Pilih Mode: <strong>"WebSocket Dedicated (Node.js / VPS / Render / LAN)"</strong> dan tempel URL Render Anda ke kolom <strong>"URL Server WebSocket Khusus (Relay)"</strong> lalu klik Simpan.</li>
+                          <li>Semua perangkat Anda di InfinityFree akan otomatis terhubung ke WebSocket Relay tersebut dengan status <span className="font-bold text-blue-600">🟢 Tersinkron (Socket.io Real-Time)</span>!</li>
+                        </ol>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SOLUSI 3: Mode LAN Kantor (Offline Penuh) */}
+                  <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-purple-600 text-white flex items-center justify-center font-black text-xs shrink-0 shadow-xs">
+                        3
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-black uppercase tracking-wider text-purple-600">Solusi Internal Instansi</span>
+                        <h4 className="font-black text-sm text-slate-900 flex items-center gap-2">
+                          <Server className="w-4 h-4 text-purple-600" />
+                          <span>Gunakan Server Lokal Kantor (XAMPP / Node.js LAN)</span>
+                        </h4>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-slate-600 leading-relaxed pl-12">
+                      Jika instansi Anda memiliki kebijakan privasi ketat atau koneksi internet luar sering putus, Anda dapat menjalankan server antrean di salah satu komputer PC kantor menggunakan <strong>XAMPP</strong> atau perintah terminal <code className="bg-slate-100 px-1.5 py-0.5 rounded font-mono font-bold text-slate-800">npm run dev -- --host 0.0.0.0</code>. Semua perangkat (TV, HP petugas, tablet kios) terhubung melalui WiFi kantor yang sama tanpa memerlukan kuota internet luar sama sekali.
+                    </p>
+                  </div>
+
+                  {/* Checklist Troubleshooting */}
+                  <div className="p-4 rounded-2xl bg-slate-100 border border-slate-200 space-y-2">
+                    <span className="font-bold text-xs text-slate-900 block flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      Checklist Cepat Jika Status Masih Offline di InfinityFree:
+                    </span>
+                    <ul className="text-xs text-slate-600 space-y-1.5 pl-5 list-disc">
+                      <li>Pastikan file <code>api/sync.php</code> sudah terunggah dan dapat dibuka langsung di browser: <code className="bg-white px-1.5 py-0.5 rounded text-blue-700 font-mono text-[11px]">https://[domain-anda]/api/sync.php</code> (harus muncul tulisan JSON <code>"status":"ok"</code>).</li>
+                      <li>Di menu <strong>Server Admin -&gt; Jaringan & Sinkronisasi</strong>, klik tombol <strong>"Cek API PHP Sync"</strong> untuk verifikasi koneksi langsung.</li>
+                      <li>Periksa file <code>.htaccess</code> di direktori root <code>htdocs/</code> agar permintaan routing tidak diblokir oleh web server.</li>
+                      <li>Bila membuka Meja Loket dari HP yang sering mati layarnya, aplikasi kini memiliki fitur bangun otomatis (Auto-Wake Sync) yang seketika mengambil data antrean terbaru saat layar diaktifkan kembali.</li>
+                    </ul>
                   </div>
                 </div>
               )}

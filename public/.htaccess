@@ -1,0 +1,21 @@
+# Apache .htaccess configuration for InfinityFree & cPanel
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Allow direct execution of API / PHP sync scripts
+  RewriteRule ^api/sync\.php$ - [L]
+  RewriteRule ^sync\.php$ - [L]
+
+  # Direct all other paths to index.html for React SPA Router
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>
+
+# Enable CORS for cross-device requests
+<IfModule mod_headers.c>
+  Header set Access-Control-Allow-Origin "*"
+  Header set Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE"
+  Header set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+</IfModule>

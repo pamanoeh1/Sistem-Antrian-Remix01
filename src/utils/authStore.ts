@@ -27,7 +27,19 @@ export function getStoredAdminCredentials(): AdminCredentials {
     return DEFAULT_SERVER_CREDENTIALS;
   }
   try {
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    return {
+      ...DEFAULT_SERVER_CREDENTIALS,
+      ...parsed,
+      recoveryPhone:
+        parsed.recoveryPhone !== undefined
+          ? parsed.recoveryPhone
+          : DEFAULT_SERVER_CREDENTIALS.recoveryPhone,
+      recoveryEmail:
+        parsed.recoveryEmail !== undefined
+          ? parsed.recoveryEmail
+          : DEFAULT_SERVER_CREDENTIALS.recoveryEmail,
+    };
   } catch {
     return DEFAULT_SERVER_CREDENTIALS;
   }
@@ -55,7 +67,18 @@ export function getStoredPenjagaAccounts(): PenjagaAccount[] {
     return DEFAULT_PENJAGA_ACCOUNTS;
   }
   try {
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return DEFAULT_PENJAGA_ACCOUNTS;
+    return parsed.map((acc: PenjagaAccount) => {
+      const def = DEFAULT_PENJAGA_ACCOUNTS.find(
+        (d) => d.username.toLowerCase() === (acc.username || '').toLowerCase()
+      );
+      return {
+        ...acc,
+        phone: acc.phone !== undefined ? acc.phone : def?.phone || '',
+        email: acc.email !== undefined ? acc.email : def?.email || '',
+      };
+    });
   } catch {
     return DEFAULT_PENJAGA_ACCOUNTS;
   }

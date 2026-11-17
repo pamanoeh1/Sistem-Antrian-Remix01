@@ -32,4 +32,7 @@ test('DEFAULT_LAN_SETTINGS has valid serverPort and sharing defaults', () => {
   assert.equal(DEFAULT_LAN_SETTINGS.serverPort, 3000);
   assert.equal(DEFAULT_LAN_SETTINGS.sharingEnabled, true);
   assert.ok(typeof DEFAULT_LAN_SETTINGS.lanPassword === 'string');
+  assert.equal(DEFAULT_LAN_SETTINGS.syncMode, 'auto');
+  assert.equal(typeof DEFAULT_LAN_SETTINGS.customServerUrl, 'string');
+  assert.equal(DEFAULT_LAN_SETTINGS.phpSyncUrl, '/api/sync.php');
 });

@@ -8,6 +8,8 @@ import {
   LanSettings,
   QueueSyncEvent,
 } from '../types/queue';
+import { sendSocketSyncEvent, onSocketSyncEvent } from './queueSocket';
+import { DEFAULT_OTP_GATEWAY } from './otpProviderLogic';
 
 const STORAGE_KEYS = {
   QUEUES: 'antrean_queues_v1',
@@ -68,6 +70,7 @@ export const DEFAULT_COUNTERS: Counter[] = [
     id: 'loket-1',
     name: 'Loket 1',
     operatorName: 'Ahmad Fauzi',
+    operatorUsername: 'loket1',
     supportedServiceIds: ['srv-a', 'srv-c'],
     currentTicketId: null,
     status: 'open',
@@ -76,6 +79,7 @@ export const DEFAULT_COUNTERS: Counter[] = [
     id: 'loket-2',
     name: 'Loket 2',
     operatorName: 'Dewi Lestari',
+    operatorUsername: 'loket2',
     supportedServiceIds: ['srv-b'],
     currentTicketId: null,
     status: 'open',
@@ -84,6 +88,7 @@ export const DEFAULT_COUNTERS: Counter[] = [
     id: 'loket-3',
     name: 'Loket 3',
     operatorName: 'Budi Santoso',
+    operatorUsername: 'loket3',
     supportedServiceIds: ['srv-a', 'srv-b'],
     currentTicketId: null,
     status: 'open',
@@ -92,6 +97,7 @@ export const DEFAULT_COUNTERS: Counter[] = [
     id: 'loket-4',
     name: 'Loket 4 (Prioritas)',
     operatorName: 'Siti Nurhaliza',
+    operatorUsername: 'loket4',
     supportedServiceIds: ['srv-d', 'srv-a'],
     currentTicketId: null,
     status: 'open',
@@ -144,7 +150,13 @@ export const DEFAULT_AUDIO: AudioSettings = {
   bellType: 'dingdong',
   voicePersona: 'gita_speechify',
   elevenLabsApiKey: 'sk_bd23076ca47adaf494a29402f21a6d956bc6881b04a446f1',
-  speechifyApiKey: 'sk_22veab8bb226z29yejppkr1bj8864xtm17tjj0g97xmsk_22veab8bb226z29yejppkr1bj8864xtm17tjj0g97xm',
+  speechifyApiKey: 'sk_22veab8bb226z29yejppkr1bj8864xtm17tjj0g97xm',
+  fishAudioApiKey: '',
+  fishAudioReferenceId: '',
+  kokoroApiKey: '',
+  kokoroBaseUrl: 'https://api.kokorotts.com',
+  cartesiaApiKey: '',
+  openAiApiKey: '',
 };
 
 export const DEFAULT_COMPANY: CompanyProfile = {
@@ -162,6 +174,12 @@ export const DEFAULT_LAN_SETTINGS: LanSettings = {
   serverPort: 3000,
   sharingEnabled: true,
   lanPassword: '123',
+  port: 3000,
+  shareActive: true,
+  syncMode: 'auto',
+  customServerUrl: '',
+  phpSyncUrl: '/api/sync.php',
+  otpGateway: DEFAULT_OTP_GATEWAY,
 };
 
 export const INITIAL_QUEUES: QueueItem[] = [
@@ -282,7 +300,31 @@ if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
   }
 }
 
+const seenEventKeys = new Map<string, number>();
+
+function isDuplicateEvent(event: QueueSyncEvent): boolean {
+  const key = `${event.type}_${event.timestamp}_${event.senderId || ''}_${event.ticket?.id || ''}`;
+  const now = Date.now();
+
+  // Prune expired keys older than 10 seconds
+  if (seenEventKeys.size > 100) {
+    seenEventKeys.forEach((time, k) => {
+      if (now - time > 10000) seenEventKeys.delete(k);
+    });
+  }
+
+  if (seenEventKeys.has(key)) {
+    return true;
+  }
+  seenEventKeys.set(key, now);
+  return false;
+}
+
 export function broadcastSyncEvent(event: QueueSyncEvent) {
+  // Mark local event as seen so echo isn't reprocessed
+  isDuplicateEvent(event);
+
+  // 1. Same-device Tab-to-Tab broadcast
   if (broadcastChannel) {
     try {
       broadcastChannel.postMessage(event);
@@ -290,31 +332,54 @@ export function broadcastSyncEvent(event: QueueSyncEvent) {
       console.warn('Broadcast error:', e);
     }
   }
+
+  // 2. Cross-device LAN broadcast via Socket.io
+  try {
+    sendSocketSyncEvent(event);
+  } catch (e) {
+    // Non-fatal if offline
+  }
 }
 
 export function subscribeSyncEvents(callback: (event: QueueSyncEvent) => void): () => void {
+  // 1. Subscribe to Socket.io events across LAN
+  const unsubscribeSocket = onSocketSyncEvent((event) => {
+    if (!isDuplicateEvent(event)) {
+      callback(event);
+    }
+  });
+
+  // 2. Fallback or Tab-to-Tab channel
   if (!broadcastChannel) {
-    // Fallback using storage event
     const handleStorage = (e: StorageEvent) => {
       if (e.key === 'antrean_last_event_v1' && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
-          callback(parsed);
+          if (!isDuplicateEvent(parsed)) {
+            callback(parsed);
+          }
         } catch {}
       }
     };
     window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
+    return () => {
+      unsubscribeSocket();
+      window.removeEventListener('storage', handleStorage);
+    };
   }
 
   const handler = (e: MessageEvent) => {
     if (e.data && e.data.type) {
-      callback(e.data as QueueSyncEvent);
+      const event = e.data as QueueSyncEvent;
+      if (!isDuplicateEvent(event)) {
+        callback(event);
+      }
     }
   };
 
   broadcastChannel.addEventListener('message', handler);
   return () => {
+    unsubscribeSocket();
     broadcastChannel?.removeEventListener('message', handler);
   };
 }
@@ -473,6 +538,15 @@ export function getStoredAudio(): AudioSettings {
         parsed?.speechifyApiKey && typeof parsed.speechifyApiKey === 'string' && parsed.speechifyApiKey.trim() !== ''
           ? parsed.speechifyApiKey.trim()
           : DEFAULT_AUDIO.speechifyApiKey,
+      fishAudioApiKey: typeof parsed?.fishAudioApiKey === 'string' ? parsed.fishAudioApiKey.trim() : '',
+      fishAudioReferenceId: typeof parsed?.fishAudioReferenceId === 'string' ? parsed.fishAudioReferenceId.trim() : '',
+      kokoroApiKey: typeof parsed?.kokoroApiKey === 'string' ? parsed.kokoroApiKey.trim() : '',
+      kokoroBaseUrl:
+        typeof parsed?.kokoroBaseUrl === 'string' && parsed.kokoroBaseUrl.trim() !== ''
+          ? parsed.kokoroBaseUrl.trim()
+          : DEFAULT_AUDIO.kokoroBaseUrl,
+      cartesiaApiKey: typeof parsed?.cartesiaApiKey === 'string' ? parsed.cartesiaApiKey.trim() : '',
+      openAiApiKey: typeof parsed?.openAiApiKey === 'string' ? parsed.openAiApiKey.trim() : '',
     };
   } catch {
     return DEFAULT_AUDIO;
@@ -547,6 +621,12 @@ export function getStoredLanSettings(): LanSettings {
       shareActive: sharingEnabled,
       lanPassword:
         parsed?.lanPassword !== undefined ? String(parsed.lanPassword) : DEFAULT_LAN_SETTINGS.lanPassword,
+      syncMode: parsed?.syncMode || DEFAULT_LAN_SETTINGS.syncMode,
+      customServerUrl: typeof parsed?.customServerUrl === 'string' ? parsed.customServerUrl.trim() : '',
+      phpSyncUrl: typeof parsed?.phpSyncUrl === 'string' && parsed.phpSyncUrl.trim() !== '' ? parsed.phpSyncUrl.trim() : '/api/sync.php',
+      otpGateway: parsed?.otpGateway
+        ? { ...DEFAULT_OTP_GATEWAY, ...parsed.otpGateway }
+        : DEFAULT_OTP_GATEWAY,
     };
   } catch {
     return DEFAULT_LAN_SETTINGS;

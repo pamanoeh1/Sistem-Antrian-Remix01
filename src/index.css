@@ -84,35 +84,56 @@
 }
 
 
-/* Thermal Printer CSS - 58mm / 80mm format */
+/* Thermal Printer CSS - Dynamic Auto-Height for 58mm / 80mm roll printers */
 @media print {
   @page {
-    margin: 0;
-    size: 80mm auto;
+    margin: 0 !important;
+    size: auto;
   }
 
-  body {
+  *, *::before, *::after {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: max-content !important;
     background: #ffffff !important;
     color: #000000 !important;
-    padding: 0 !important;
-    margin: 0 !important;
+    overflow: visible !important;
   }
 
   /* Hide everything on the page except the printable receipt */
-  .no-print, nav, header, aside, .non-printable {
+  .no-print, nav, header, aside, footer, .non-printable, button {
     display: none !important;
   }
 
   .printable-ticket-section {
     display: block !important;
-    position: absolute;
-    left: 0;
-    top: 0;
+    position: relative !important;
     width: 100% !important;
-    max-width: 80mm !important;
+    max-width: 76mm !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: max-content !important;
     margin: 0 auto !important;
-    padding: 4mm !important;
+    padding: 2mm 3mm !important;
+    box-sizing: border-box !important;
+    border: none !important;
     background: #ffffff !important;
     color: #000000 !important;
+    page-break-after: avoid !important;
+    break-after: avoid !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .printable-ticket-section.ticket-58mm {
+    max-width: 52mm !important;
+    padding: 1.5mm 2mm !important;
   }
 }

@@ -22,11 +22,29 @@ import {
   Building2,
   Sparkles,
   ArrowRight,
+  Globe,
+  Wifi,
 } from 'lucide-react';
+import { useQueueSocket } from '../../hooks/useQueueSocket';
 import {
   formatContinuousMarqueeContent,
   calculateMarqueeDuration,
 } from '../../utils/marqueeLogic';
+import {
+  MAX_COUNTERS_PER_ROW,
+  COUNTER_CAROUSEL_INTERVAL_MS,
+  getCounterGridClassName,
+  getCounterGridColumnsCount,
+  paginateCounters,
+  findCounterPageIndex,
+  getNextCarouselPageIndex,
+} from '../../utils/displayLayoutLogic';
+import {
+  applyKeyDownToPressedSet,
+  applyKeyUpToPressedSet,
+  isCtrlCBExitChord,
+  shouldInterceptEscapeInFullscreen,
+} from '../../utils/fullscreenShortcutLogic';
 
 interface DisplayViewProps {
   queues: QueueItem[];
@@ -37,6 +55,7 @@ interface DisplayViewProps {
   company: CompanyProfile;
   activeTicket: QueueItem | null;
   lastEvent?: QueueSyncEvent | null;
+  onFullscreenChange?: (isFullscreen: boolean) => void;
 }
 
 export const DisplayView: React.FC<DisplayViewProps> = ({
@@ -48,12 +67,40 @@ export const DisplayView: React.FC<DisplayViewProps> = ({
   company,
   activeTicket,
   lastEvent,
+  onFullscreenChange,
 }) => {
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [isCallingAnimation, setIsCallingAnimation] = useState(false);
+  const [currentCounterPage, setCurrentCounterPage] = useState(0);
+  const [carouselResetTick, setCarouselResetTick] = useState(0);
+
+  const allowFullscreenExitRef = useRef<boolean>(false);
+  const isFullscreenRef = useRef<boolean>(false);
+  const pressedKeysRef = useRef<Set<string>>(new Set());
+
+  const { syncStatus } = useQueueSocket({ role: 'display' });
+
+  const counterPages = paginateCounters(counters, MAX_COUNTERS_PER_ROW);
+  const totalCounterPages = Math.max(1, counterPages.length);
+  const safeCounterPage = Math.min(currentCounterPage, totalCounterPages - 1);
+
+  // Clamp current page if counters are deleted
+  useEffect(() => {
+    if (currentCounterPage >= totalCounterPages) {
+      setCurrentCounterPage(Math.max(0, totalCounterPages - 1));
+    }
+  }, [currentCounterPage, totalCounterPages]);
+
+  // Auto-advance counter carousel every 30 seconds when more than 5 counters exist
+  useEffect(() => {
+    if (counterPages.length <= 1) return;
+    const interval = setInterval(() => {
+      setCurrentCounterPage((prev) => getNextCarouselPageIndex(prev, counterPages.length));
+    }, COUNTER_CAROUSEL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [counterPages.length, carouselResetTick]);
 
   // Time ticker with timezone support
   useEffect(() => {
@@ -95,12 +142,18 @@ export const DisplayView: React.FC<DisplayViewProps> = ({
     return () => clearInterval(interval);
   }, [company.timezone]);
 
-  // Listen to call events to trigger calling animation
+  // Listen to call events to trigger calling animation & slide counter carousel to the called counter's page
   useEffect(() => {
     if (!lastEvent) return;
 
     if (lastEvent.type === 'TICKET_CALLED' || lastEvent.type === 'TICKET_RECALLED') {
       const ticket = lastEvent.ticket || activeTicket;
+      const targetCounterId = lastEvent.counter?.id || ticket?.counterId;
+      const targetPage = findCounterPageIndex(counters, targetCounterId, MAX_COUNTERS_PER_ROW);
+      if (targetPage >= 0) {
+        setCurrentCounterPage(targetPage);
+        setCarouselResetTick((prev) => prev + 1);
+      }
 
       if (ticket) {
         setIsCallingAnimation(true);
@@ -108,14 +161,124 @@ export const DisplayView: React.FC<DisplayViewProps> = ({
         return () => clearTimeout(timer);
       }
     }
-  }, [lastEvent, activeTicket]);
+  }, [lastEvent, activeTicket, counters]);
 
   const [isBellPlaying, setIsBellPlaying] = useState<boolean>(false);
 
-  // Sync fullscreen state with document.fullscreenElement (F11, Escape, button)
+  const exitFullscreenExplicitly = React.useCallback(() => {
+    allowFullscreenExitRef.current = true;
+    isFullscreenRef.current = false;
+    setIsFullscreen(false);
+    onFullscreenChange?.(false);
+
+    try {
+      const navWithLock = navigator as Navigator & {
+        keyboard?: { unlock?: () => void };
+      };
+      navWithLock.keyboard?.unlock?.();
+    } catch {
+      // ignore
+    }
+
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+  }, [onFullscreenChange]);
+
+  const enterFullscreen = React.useCallback(() => {
+    allowFullscreenExitRef.current = false;
+    isFullscreenRef.current = true;
+    setIsFullscreen(true);
+    onFullscreenChange?.(true);
+
+    const requestNative = document.documentElement?.requestFullscreen?.();
+    if (requestNative && typeof requestNative.then === 'function') {
+      requestNative
+        .then(() => {
+          try {
+            const navWithLock = navigator as Navigator & {
+              keyboard?: { lock?: (keys: string[]) => Promise<void> };
+            };
+            navWithLock.keyboard?.lock?.(['Escape']).catch(() => {});
+          } catch {
+            // ignore
+          }
+        })
+        .catch(() => {
+          // Keep app-level uninterrupted fullscreen active even if browser iframe blocks native API
+        });
+    }
+  }, [onFullscreenChange]);
+
+  // Notify parent when unmounting while fullscreen
+  useEffect(() => {
+    return () => {
+      onFullscreenChange?.(false);
+      try {
+        const navWithLock = navigator as Navigator & {
+          keyboard?: { unlock?: () => void };
+        };
+        navWithLock.keyboard?.unlock?.();
+      } catch {
+        // ignore
+      }
+    };
+  }, [onFullscreenChange]);
+
+  // Simultaneous Ctrl + C + B keyboard shortcut to exit fullscreen + Escape guard
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      applyKeyDownToPressedSet(pressedKeysRef.current, e.key, e.code);
+
+      if (isFullscreenRef.current && isCtrlCBExitChord(pressedKeysRef.current, e.ctrlKey)) {
+        e.preventDefault();
+        e.stopPropagation();
+        pressedKeysRef.current.clear();
+        exitFullscreenExplicitly();
+        return;
+      }
+
+      if (
+        e.key === 'Escape' &&
+        shouldInterceptEscapeInFullscreen(isFullscreenRef.current, allowFullscreenExitRef.current)
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      applyKeyUpToPressedSet(pressedKeysRef.current, e.key, e.code, e.ctrlKey);
+    };
+
+    const handleWindowBlur = () => {
+      pressedKeysRef.current.clear();
+    };
+
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    window.addEventListener('keyup', handleKeyUp, { capture: true });
+    window.addEventListener('blur', handleWindowBlur);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, { capture: true });
+      window.removeEventListener('keyup', handleKeyUp, { capture: true });
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [exitFullscreenExplicitly]);
+
+  // Keep native fullscreen events aligned only when explicitly exited or natively entered
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
+      if (document.fullscreenElement) {
+        allowFullscreenExitRef.current = false;
+        isFullscreenRef.current = true;
+        setIsFullscreen(true);
+        onFullscreenChange?.(true);
+      } else if (allowFullscreenExitRef.current) {
+        isFullscreenRef.current = false;
+        setIsFullscreen(false);
+        onFullscreenChange?.(false);
+      }
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
@@ -123,19 +286,13 @@ export const DisplayView: React.FC<DisplayViewProps> = ({
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
     };
-  }, []);
+  }, [onFullscreenChange]);
 
   const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement
-        .requestFullscreen()
-        .then(() => setIsFullscreen(true))
-        .catch(() => {});
+    if (!isFullscreen) {
+      enterFullscreen();
     } else {
-      document
-        .exitFullscreen()
-        .then(() => setIsFullscreen(false))
-        .catch(() => {});
+      exitFullscreenExplicitly();
     }
   };
 
@@ -161,19 +318,25 @@ export const DisplayView: React.FC<DisplayViewProps> = ({
   );
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between selection:bg-blue-600 selection:text-white">
+    <div
+      data-testid="display-root"
+      data-fullscreen={isFullscreen ? 'true' : 'false'}
+      className={`bg-slate-950 text-slate-100 flex flex-col justify-between selection:bg-blue-600 selection:text-white ${
+        isFullscreen
+          ? 'fixed inset-0 z-[120] min-h-screen overflow-y-auto'
+          : 'min-h-screen'
+      }`}
+    >
       {/* Display Header - Optimized for Mobile, Tablet & Big Screens */}
       <header className="bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-3.5 sm:px-6 pt-11 sm:pt-4 pb-3.5 sm:pb-4 flex flex-col md:flex-row items-center justify-between gap-3 sm:gap-4 shrink-0 shadow-lg">
         {/* Left: Organization Identity */}
         <div className="flex items-center gap-3 sm:gap-3.5 w-full md:w-auto">
           {company.logoUrl ? (
-            <div className="w-11 h-11 sm:w-13 sm:h-13 rounded-xl bg-white/10 backdrop-blur border border-white/20 p-1 flex items-center justify-center shadow-lg overflow-hidden shrink-0">
-              <img
-                src={company.logoUrl}
-                alt="Logo Instansi"
-                className="w-full h-full object-contain"
-              />
-            </div>
+            <img
+              src={company.logoUrl}
+              alt="Logo Instansi"
+              className="h-11 sm:h-13 w-auto max-w-[140px] object-contain shrink-0"
+            />
           ) : (
             <div className="w-11 h-11 sm:w-13 sm:h-13 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center shadow-lg text-white shrink-0">
               <Building2 className="w-6 h-6 sm:w-7 sm:h-7" />
@@ -181,10 +344,35 @@ export const DisplayView: React.FC<DisplayViewProps> = ({
           )}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping shrink-0" />
-              <span className="text-[10px] sm:text-[11px] font-bold text-emerald-400 uppercase tracking-widest truncate flex items-center gap-1.5">
-                <Radio className="w-3 h-3 text-emerald-400 shrink-0" />
-                <span>Jaringan Lokal (LAN) • Real-Time Display</span>
+              <span
+                className={`w-2 h-2 rounded-full shrink-0 ${
+                  syncStatus.connected
+                    ? syncStatus.engine === 'php'
+                      ? 'bg-sky-400 animate-pulse'
+                      : 'bg-emerald-500 animate-ping'
+                    : 'bg-rose-500'
+                }`}
+              />
+              <span
+                className={`text-[10px] sm:text-[11px] font-bold uppercase tracking-widest truncate flex items-center gap-1.5 ${
+                  syncStatus.connected
+                    ? syncStatus.engine === 'php'
+                      ? 'text-sky-300'
+                      : 'text-emerald-400'
+                    : 'text-rose-400'
+                }`}
+                title={syncStatus.details}
+              >
+                {syncStatus.connected ? (
+                  syncStatus.engine === 'php' ? (
+                    <Globe className="w-3 h-3 text-sky-400 shrink-0" />
+                  ) : (
+                    <Radio className="w-3 h-3 text-emerald-400 shrink-0" />
+                  )
+                ) : (
+                  <Wifi className="w-3 h-3 text-rose-400 shrink-0" />
+                )}
+                <span>{syncStatus.label}</span>
               </span>
             </div>
             <h1 className="text-base sm:text-xl md:text-2xl font-black text-white tracking-tight leading-tight truncate">
@@ -226,20 +414,28 @@ export const DisplayView: React.FC<DisplayViewProps> = ({
               />
             </button>
 
-            {/* Mode Layar Penuh: Menyala ketika aktif dan mati kalau tidak aktif */}
+            {/* Mode Layar Penuh: Menyala ketika aktif; hanya keluar saat diklik atau tekan Ctrl+C+B */}
             <button
               type="button"
+              data-testid="display-fullscreen-toggle-btn"
               onClick={toggleFullscreen}
-              className={`p-2 sm:p-2.5 rounded-xl border transition-all duration-300 cursor-pointer ${
+              className={`px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl border transition-all duration-300 cursor-pointer flex items-center gap-1.5 ${
                 isFullscreen
-                  ? 'bg-blue-600 text-white border-blue-400 ring-4 ring-blue-400/50 shadow-xl shadow-blue-500/40 scale-105'
+                  ? 'bg-blue-600 hover:bg-blue-700 text-white border-blue-400 ring-4 ring-blue-400/50 shadow-xl shadow-blue-500/40'
                   : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-400 hover:text-white'
               }`}
-              title={isFullscreen ? 'Mode Layar Penuh Aktif (Klik untuk keluar)' : 'Aktifkan Mode Layar Penuh (TV)'}
+              title={
+                isFullscreen
+                  ? 'Keluar Mode Layar Penuh (Klik atau tekan Ctrl + C + B bersamaan)'
+                  : 'Aktifkan Mode Layar Penuh (TV)'
+              }
               aria-label={isFullscreen ? 'Keluar Mode Layar Penuh' : 'Aktifkan Mode Layar Penuh'}
             >
               {isFullscreen ? (
-                <Minimize2 className="w-4 h-4 sm:w-5 sm:h-5 text-white animate-pulse" />
+                <>
+                  <Minimize2 className="w-4 h-4 sm:w-5 sm:h-5 text-white shrink-0" />
+                  <span className="text-[11px] font-bold hidden sm:inline">Keluar Layar Penuh</span>
+                </>
               ) : (
                 <Maximize2 className="w-4 h-4 sm:w-5 sm:h-5 text-slate-400" />
               )}
@@ -324,110 +520,171 @@ export const DisplayView: React.FC<DisplayViewProps> = ({
             </div>
           </div>
 
-          {/* Grid of All Counters */}
+          {/* Single-Row Sliding Carousel of All Counters (max 5 per row, slides every 30s or on active call) */}
           <div>
             <div className="flex items-center justify-between mb-3 px-1">
               <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
                 <Radio className="w-4 h-4 text-blue-400" />
                 <span>Status Semua Loket Pelayanan</span>
               </h2>
-              <span className="text-xs text-slate-500">Live Status</span>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
-              {counters.map((c) => {
-                const isCurrentActive = activeTicket?.counterId === c.id;
-                const counterTicket = queues.find((q) => q.id === c.currentTicketId);
-                const hasTicket = counterTicket && counterTicket.status !== 'completed';
-                const isBreak = c.status === 'break';
-                const isClosed = c.status === 'closed';
-
-                return (
-                  <div
-                    key={c.id}
-                    className={`rounded-2xl p-3.5 sm:p-4 border transition-all duration-300 flex flex-col justify-between ${
-                      isCurrentActive && isCallingAnimation
-                        ? 'bg-amber-950/40 border-amber-500 ring-2 ring-amber-500/40'
-                        : isBreak
-                        ? 'bg-amber-950/30 border-amber-500/50 shadow-xs'
-                        : isClosed
-                        ? 'bg-slate-900/40 border-slate-800/80 opacity-70'
-                        : hasTicket
-                        ? 'bg-slate-900 border-slate-800'
-                        : 'bg-slate-900/50 border-slate-800/60'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs font-black uppercase text-slate-300 tracking-wide truncate">
-                        {c.name}
-                      </span>
-                      <span
-                        className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                          isBreak
-                            ? 'bg-amber-400 ring-2 ring-amber-400/40'
-                            : isClosed
-                            ? 'bg-rose-500'
-                            : hasTicket
-                            ? 'bg-emerald-400 animate-pulse'
-                            : 'bg-slate-600'
-                        }`}
-                      />
-                    </div>
-
-                    <div className="my-2 text-center">
-                      <div
-                        className={`font-black tracking-tight ${
-                          isBreak
-                            ? 'text-lg sm:text-xl font-sans text-amber-300 tracking-wider uppercase py-1'
-                            : isClosed
-                            ? 'text-lg sm:text-xl font-sans text-slate-400 tracking-wider uppercase py-1'
-                            : 'text-2xl sm:text-3xl font-mono text-white'
-                        }`}
-                      >
-                        {isBreak
-                          ? 'ISTIRAHAT'
-                          : isClosed
-                          ? 'TUTUP'
-                          : hasTicket
-                          ? counterTicket.number
-                          : '---'}
-                      </div>
-                      <div className="text-[11px] font-semibold text-slate-400 truncate mt-1">
-                        {isBreak
-                          ? 'Jeda Istirahat'
-                          : isClosed
-                          ? 'Loket Belum Buka'
-                          : hasTicket
-                          ? counterTicket.serviceName
-                          : 'Siap Melayani'}
-                      </div>
-                    </div>
-
-                    <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-[10px] text-slate-400 gap-1">
-                      <span className="truncate">{c.operatorName}</span>
-                      <span
-                        className={`font-bold shrink-0 ${
-                          isBreak
-                            ? 'text-amber-400'
-                            : isClosed
-                            ? 'text-rose-400'
-                            : hasTicket
-                            ? 'text-emerald-400'
-                            : 'text-slate-500'
-                        }`}
-                      >
-                        {isBreak
-                          ? 'Istirahat'
-                          : isClosed
-                          ? 'Tutup'
-                          : hasTicket
-                          ? 'Melayani'
-                          : 'Standby'}
-                      </span>
+              <div className="flex items-center gap-2.5">
+                {counterPages.length > 1 && (
+                  <div className="flex items-center gap-1.5" data-testid="counter-carousel-pagination">
+                    <span className="text-[11px] font-bold text-blue-300 bg-blue-950/80 border border-blue-800/70 px-2 py-0.5 rounded-full">
+                      Hal {safeCounterPage + 1}/{counterPages.length}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      {counterPages.map((_, pIdx) => (
+                        <button
+                          key={pIdx}
+                          type="button"
+                          onClick={() => {
+                            setCurrentCounterPage(pIdx);
+                            setCarouselResetTick((prev) => prev + 1);
+                          }}
+                          className={`h-2 rounded-full transition-all cursor-pointer ${
+                            safeCounterPage === pIdx
+                              ? 'w-5 bg-blue-400'
+                              : 'w-2 bg-slate-700 hover:bg-slate-500'
+                          }`}
+                          aria-label={`Halaman Loket ${pIdx + 1}`}
+                        />
+                      ))}
                     </div>
                   </div>
-                );
-              })}
+                )}
+                <span className="text-xs text-slate-500">Live Status</span>
+              </div>
+            </div>
+
+            <div className="overflow-hidden" data-testid="counter-carousel-viewport">
+              <div
+                data-testid="counter-carousel-track"
+                className="flex transition-transform duration-700 ease-in-out"
+                style={{ transform: `translateX(-${safeCounterPage * 100}%)` }}
+              >
+                {counterPages.map((pageCounters, pageIdx) => {
+                  const colsCount = getCounterGridColumnsCount(pageCounters.length);
+                  const isDense = colsCount >= 5;
+                  const isWide = colsCount <= 2;
+
+                  return (
+                    <div
+                      key={pageIdx}
+                      data-testid={`counter-carousel-page-${pageIdx}`}
+                      className="w-full shrink-0"
+                    >
+                      <div className={getCounterGridClassName(pageCounters.length)}>
+                        {pageCounters.map((c) => {
+                          const isCurrentActive = activeTicket?.counterId === c.id;
+                          const counterTicket =
+                            queues.find(
+                              (q) =>
+                                (q.id === c.currentTicketId || q.counterId === c.id) &&
+                                (q.status === 'calling' || q.status === 'serving')
+                            ) || (c.currentTicketId ? queues.find((q) => q.id === c.currentTicketId) : null);
+                          const hasTicket = counterTicket && counterTicket.status !== 'completed';
+                          const isBreak = c.status === 'break';
+                          const isClosed = c.status === 'closed';
+
+                          return (
+                            <div
+                              key={c.id}
+                              data-counter-id={c.id}
+                              className={`rounded-2xl border transition-all duration-300 flex flex-col justify-between ${
+                                isDense ? 'p-2.5 sm:p-3' : isWide ? 'p-4 sm:p-5' : 'p-3.5 sm:p-4'
+                              } ${
+                                isCurrentActive && isCallingAnimation
+                                  ? 'bg-amber-950/40 border-amber-500 ring-2 ring-amber-500/40'
+                                  : isBreak
+                                  ? 'bg-amber-950/30 border-amber-500/50 shadow-xs'
+                                  : isClosed
+                                  ? 'bg-slate-900/40 border-slate-800/80 opacity-70'
+                                  : hasTicket
+                                  ? 'bg-slate-900 border-slate-800'
+                                  : 'bg-slate-900/50 border-slate-800/60'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs font-black uppercase text-slate-300 tracking-wide truncate">
+                                  {c.name}
+                                </span>
+                                <span
+                                  className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                                    isBreak
+                                      ? 'bg-amber-400 ring-2 ring-amber-400/40'
+                                      : isClosed
+                                      ? 'bg-rose-500'
+                                      : hasTicket
+                                      ? 'bg-emerald-400 animate-pulse'
+                                      : 'bg-slate-600'
+                                  }`}
+                                />
+                              </div>
+
+                              <div className="my-2 text-center">
+                                <div
+                                  className={`font-black tracking-tight ${
+                                    isBreak
+                                      ? 'text-base sm:text-lg font-sans text-amber-300 tracking-wider uppercase py-1'
+                                      : isClosed
+                                      ? 'text-base sm:text-lg font-sans text-slate-400 tracking-wider uppercase py-1'
+                                      : isDense
+                                      ? 'text-xl sm:text-2xl font-mono text-white'
+                                      : isWide
+                                      ? 'text-3xl sm:text-4xl font-mono text-white'
+                                      : 'text-2xl sm:text-3xl font-mono text-white'
+                                  }`}
+                                >
+                                  {isBreak
+                                    ? 'ISTIRAHAT'
+                                    : isClosed
+                                    ? 'TUTUP'
+                                    : hasTicket
+                                    ? counterTicket.number
+                                    : '---'}
+                                </div>
+                                <div className="text-[11px] font-semibold text-slate-400 truncate mt-1">
+                                  {isBreak
+                                    ? 'Jeda Istirahat'
+                                    : isClosed
+                                    ? 'Loket Belum Buka'
+                                    : hasTicket
+                                    ? counterTicket.serviceName
+                                    : 'Siap Melayani'}
+                                </div>
+                              </div>
+
+                              <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-[10px] text-slate-400 gap-1">
+                                <span className="truncate">{c.operatorName}</span>
+                                <span
+                                  className={`font-bold shrink-0 ${
+                                    isBreak
+                                      ? 'text-amber-400'
+                                      : isClosed
+                                      ? 'text-rose-400'
+                                      : hasTicket
+                                      ? 'text-emerald-400'
+                                      : 'text-slate-500'
+                                  }`}
+                                >
+                                  {isBreak
+                                    ? 'Istirahat'
+                                    : isClosed
+                                    ? 'Tutup'
+                                    : hasTicket
+                                    ? 'Melayani'
+                                    : 'Standby'}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </div>

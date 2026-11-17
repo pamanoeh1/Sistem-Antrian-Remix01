@@ -67,3 +67,37 @@ test('Late call detector correctly flags events older than 8000ms', () => {
   const staleTimestamp = Date.now() - 15000; // 15 seconds old
   assert.equal(isLateCall(staleTimestamp), true);
 });
+
+test('COUNTER_UPDATED carries updated counters array across devices for buka, istirahat, tutup', () => {
+  const updatedCounters: Counter[] = [
+    {
+      id: 'loket-1',
+      name: 'Loket 1',
+      operatorName: 'Ahmad Fauzi',
+      supportedServiceIds: ['srv-1'],
+      currentTicketId: null,
+      status: 'break',
+    },
+    {
+      id: 'loket-2',
+      name: 'Loket 2',
+      operatorName: 'Dewi Lestari',
+      supportedServiceIds: ['srv-2'],
+      currentTicketId: null,
+      status: 'closed',
+    },
+  ];
+
+  const syncEvent: QueueSyncEvent = {
+    type: 'COUNTER_UPDATED',
+    counters: updatedCounters,
+    timestamp: Date.now(),
+    senderId: 'admin-tab-01',
+  };
+
+  assert.equal(syncEvent.type, 'COUNTER_UPDATED');
+  assert.ok(Array.isArray(syncEvent.counters));
+  assert.equal(syncEvent.counters?.[0].status, 'break');
+  assert.equal(syncEvent.counters?.[1].status, 'closed');
+});
+

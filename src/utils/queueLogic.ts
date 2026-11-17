@@ -158,3 +158,73 @@ export function filterQueues(
     return true;
   });
 }
+
+/**
+ * Checks if a counter currently has an active serving or calling ticket.
+ */
+export function getCurrentServingTicketForCounter(
+  counter: Counter | null | undefined,
+  queues: QueueItem[]
+): QueueItem | null {
+  if (!counter) return null;
+  return (
+    queues.find(
+      (q) =>
+        (q.id === counter.currentTicketId || q.counterId === counter.id) &&
+        (q.status === 'calling' || q.status === 'serving')
+    ) || null
+  );
+}
+
+/**
+ * Validates whether a counter is allowed to call the next ticket.
+ * Invariant: Cannot call next ticket if there is an active ticket that has not been marked "Selesai" (or "Lewati").
+ */
+export function canCounterCallNext(
+  counter: Counter | null | undefined,
+  queues: QueueItem[]
+): { canCall: boolean; activeTicket: QueueItem | null; reason?: string } {
+  if (!counter) {
+    return { canCall: false, activeTicket: null, reason: 'Loket tidak ditemukan' };
+  }
+  const active = getCurrentServingTicketForCounter(counter, queues);
+  if (active) {
+    return {
+      canCall: false,
+      activeTicket: active,
+      reason: `Antrean ${active.number} masih berlangsung di ${counter.name}. Harap klik "Selesai" (atau "Lewati") terlebih dahulu sebelum memanggil antrean berikutnya.`,
+    };
+  }
+  const nextTicket = getNextWaitingTicketForCounter(counter, queues);
+  if (!nextTicket) {
+    return {
+      canCall: false,
+      activeTicket: null,
+      reason: `Tidak ada antrean yang menunggu untuk ${counter.name}.`,
+    };
+  }
+  return { canCall: true, activeTicket: null };
+}
+
+/**
+ * Resolves the destination counter label for a printed ticket.
+ * Uses the assigned counterName when available, otherwise resolves supporting counters for the ticket's service.
+ */
+export function resolveTicketDestinationLabel(
+  ticket: Pick<QueueItem, 'counterName' | 'serviceId'>,
+  counters: Counter[] = []
+): string {
+  if (ticket.counterName && ticket.counterName.trim()) {
+    return ticket.counterName.trim();
+  }
+
+  const matching = counters.filter((c) => c.supportedServiceIds.includes(ticket.serviceId));
+  if (matching.length > 0) {
+    const activeMatching = matching.filter((c) => c.status !== 'closed');
+    const chosen = activeMatching.length > 0 ? activeMatching : matching;
+    return chosen.map((c) => c.name).join(' / ');
+  }
+
+  return 'Loket Pelayanan';
+}
+

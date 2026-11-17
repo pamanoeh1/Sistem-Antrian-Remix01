@@ -1,3 +1,6 @@
+import type { PenjagaAccount, AdminCredentials } from '../utils/authLogic';
+import type { OtpGatewaySettings } from '../utils/otpProviderLogic';
+
 export type QueueStatus = 'waiting' | 'calling' | 'serving' | 'completed' | 'skipped';
 
 export interface QueueItem {
@@ -32,6 +35,7 @@ export interface Counter {
   id: string;
   name: string;
   operatorName: string;
+  operatorUsername?: string;
   supportedServiceIds: string[];
   currentTicketId: string | null;
   status: 'open' | 'closed' | 'break';
@@ -59,9 +63,20 @@ export interface MediaSettings {
 export interface VoicePersona {
   id: string;
   name: string;
-  provider: 'ElevenLabs' | 'Speechify' | 'Web Speech ID';
+  provider:
+    | 'ElevenLabs'
+    | 'Speechify'
+    | 'Fish Audio'
+    | 'Kokoro TTS'
+    | 'Cartesia Sonic'
+    | 'OpenAI TTS'
+    | 'Web Speech ID';
   elevenLabsVoiceId?: string;
   speechifyVoiceId?: string;
+  fishAudioReferenceId?: string;
+  kokoroVoiceId?: string;
+  cartesiaVoiceId?: string;
+  openAiVoiceId?: string;
   gender: 'female' | 'male';
   description: string;
   pitch: number;
@@ -81,6 +96,12 @@ export interface AudioSettings {
   elevenLabsApiKey?: string;
   elevenLabsVoiceId?: string;
   speechifyApiKey?: string;
+  fishAudioApiKey?: string;
+  fishAudioReferenceId?: string;
+  kokoroApiKey?: string;
+  kokoroBaseUrl?: string;
+  cartesiaApiKey?: string;
+  openAiApiKey?: string;
 }
 
 export type TimezoneCode = 'WIB' | 'WITA' | 'WIT';
@@ -95,6 +116,8 @@ export interface CompanyProfile {
   timezone: TimezoneCode; // WIB (UTC+7), WITA (UTC+8), WIT (UTC+9)
 }
 
+export type SyncMode = 'auto' | 'socket' | 'php';
+
 export interface LanSettings {
   serverIp: string;
   serverPort: number;
@@ -102,6 +125,10 @@ export interface LanSettings {
   lanPassword: string;
   port?: number;
   shareActive?: boolean;
+  syncMode?: SyncMode;
+  customServerUrl?: string;
+  phpSyncUrl?: string;
+  otpGateway?: OtpGatewaySettings;
 }
 
 export interface QueueSyncEvent {
@@ -112,9 +139,26 @@ export interface QueueSyncEvent {
     | 'TICKET_COMPLETED'
     | 'TICKET_SKIPPED'
     | 'STATE_RESET'
-    | 'COUNTER_UPDATED';
+    | 'COUNTER_UPDATED'
+    | 'AUDIO_UPDATED'
+    | 'MEDIA_UPDATED'
+    | 'COMPANY_UPDATED'
+    | 'SERVICES_UPDATED'
+    | 'ACCOUNTS_UPDATED'
+    | 'ADMIN_CREDENTIALS_UPDATED'
+    | 'LAN_SETTINGS_UPDATED'
+    | 'SETTINGS_SYNC';
   ticket?: QueueItem;
   counter?: Counter;
+  audioSettings?: AudioSettings;
+  mediaSettings?: MediaSettings;
+  company?: CompanyProfile;
+  services?: ServiceCategory[];
+  counters?: Counter[];
+  queues?: QueueItem[];
+  penjagaAccounts?: PenjagaAccount[];
+  adminCredentials?: AdminCredentials;
+  lanSettings?: LanSettings;
   timestamp: number;
   senderId?: string;
 }
